@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+requests
+jinja2
+firebase-admin
+twilio
+python-dotenv
