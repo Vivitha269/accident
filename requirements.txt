@@ -5,3 +5,4 @@ jinja2
 firebase-admin
 twilio
 python-dotenv
+pydantic

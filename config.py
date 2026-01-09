@@ -1,5 +1,9 @@
 import firebase_admin
-from firebase_admin import credentials, firestore,messaging
-cred=credentials.Certificate("ai-accident-firebase-adminsdk-fbsvc-0b4a184229.json")
+from firebase_admin import credentials, firestore, messaging
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+cred = credentials.Certificate(os.getenv('FIREBASE_CREDENTIALS'))
 firebase_admin.initialize_app(cred)
-db=firestore.client()
+db = firestore.client()
