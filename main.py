@@ -36,7 +36,8 @@ class ContactUpdate(BaseModel):
 @app.post("/contacts")
 def add_contacts(userId: str, data:ContactUpdate):
     """Saves emergency contact numbers."""
-    db.collection("users").document(userId).user_ref.update({"emergencyContacts": data.Contacts})
+    user_ref=db.collection("users").document(userId)
+    user_ref.update({"emergencyContacts": data.Contacts})
     return {"message": f" Successfully Emergyency Contacts {len(data.Contacts)} added for {userId}"}
 
 # --- 2. ACCIDENT FLOW ---
