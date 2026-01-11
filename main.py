@@ -102,25 +102,59 @@ def trigger_all_alerts(accident_id: str): # <-- FIX #1: Removed the acc_doc: dic
         hospital = find_top_3_hospitals(acc_data['latitude'], acc_data['longitude'])[0]
         police = find_nearest_police(acc_data['latitude'], acc_data['longitude'])
 
-        # 3. Notify Family (from Firestore)
+# 3. Notify Family (from Firestore)
         try:
             user_doc = db.collection("users").document(acc_data['userId']).get()
             if user_doc.exists:
-                # <-- FIX #2: Handle list of maps, not list of strings
-                contacts: List[Dict[str, str]] = user_doc.to_dict().get("emergencyContacts", [])
+                user_data = user_doc.to_dict()
+                print(f"DEBUG: User data retrieved: {user_data}")
+                
+                # Handle different contact data formats
+                contacts_raw = user_data.get("emergencyContacts", [])
+                print(f"DEBUG: Raw contacts data: {contacts_raw} (type: {type(contacts_raw)})")
+                
+                # Parse contacts based on data structure
+                contacts: List[Dict[str, str]] = []
+                
+                if isinstance(contacts_raw, list):
+                    for item in contacts_raw:
+                        if isinstance(item, dict):
+                            contacts.append(item)
+                        elif isinstance(item, str):
+                            # Handle case where contacts are stored as strings
+                            print(f"WARNING: Contact as string (old format): {item}")
+                            if item.startswith('+'):
+                                contacts.append({"phone": item, "name": "Emergency Contact"})
+                        else:
+                            print(f"WARNING: Unknown contact format: {item}")
+                elif isinstance(contacts_raw, dict):
+                    # Handle single contact as dict
+                    contacts.append(contacts_raw)
+                
+                print(f"DEBUG: Parsed contacts: {contacts}")
                 print(f"Found {len(contacts)} emergency contacts.")
-                for contact_map in contacts:
-                    phone_number = contact_map.get("phone")
+                
+                for i, contact_map in enumerate(contacts):
+                    print(f"DEBUG: Processing contact {i}: {contact_map} (type: {type(contact_map)})")
+                    
+                    # Try different key names for phone
+                    phone_number = (contact_map.get("phone") or 
+                                   contact_map.get("phoneNumber") or 
+                                   contact_map.get("mobile") or
+                                   contact_map.get("telephone"))
+                    
                     if phone_number:
                         print(f"   - Alerting family contact at {phone_number}")
                         send_sms(phone_number, sms_text)
                         make_call(phone_number, victim_name)
                     else:
-                        print(f"   - WARNING: Found a contact map without a 'phone' key: {contact_map}")
+                        print(f"   - WARNING: Contact map without valid phone key: {contact_map}")
             else:
                 print(f"WARNING: User document for userId {acc_data['userId']} not found.")
         except Exception as e:
-            print(f"ERROR during family alert notifications: {e}") # Log error but don't crash
+            print(f"ERROR during family alert notifications: {e}")
+            import traceback
+            traceback.print_exc()
 
         # 4. Notify Police (Hardcoded Mobile)
         try:
