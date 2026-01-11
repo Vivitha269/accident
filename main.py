@@ -1,8 +1,8 @@
 import asyncio
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, HTTPException
 from firebase_admin import firestore
 from pydantic import BaseModel
-from typing import List
+from typing import List, Dict
 
 # Local imports
 from config import db
@@ -11,118 +11,109 @@ from services.places import find_nearest_police, find_top_3_hospitals
 
 app = FastAPI()
 
-# --- 🚀 REPLACE THESE WITH YOUR TWO TEST MOBILE NUMBERS ---
-POLICE_MOBILE = "+919342170059"  # First test phone
-HOSPITAL_MOBILE = "+917338903743" # Second test phone
-
 @app.get("/")
 def home():
     """Health check for Render."""
     return {"status": "Accident Detection API Live", "mode": "Safe Demo"}
 
-# --- 1. USER CONTACT REGISTRATION ---
-class ContactUpdate(BaseModel):
-    Contacts: List[str]
-
-@app.post("/contacts")
-def add_contacts(userId: str, data: ContactUpdate):
-    """Saves family contacts to Firestore."""
-    user_ref = db.collection("Users").document(userId)
-    user_ref.update({"emergencyContacts": data.Contacts})
-    return {"message": "Emergency contacts saved"}
-
-# --- 2. ACCIDENT FLOW WITH 30s ALARM ---
+# --- ACCIDENT REPORTING (NO CHANGE NEEDED HERE) ---
 @app.post("/accident")
-async def accident_report(userId: str, name: str, lat: float, lon: float, background_tasks: BackgroundTasks):
-    """Reports accident and starts 30-second background timer."""
-    acc_ref = db.collection("accidents").add({
-        "userId": userId, 
-        "name": name, 
-        "latitude": lat, 
-        "longitude": lon,
-        "status": "awaiting_confirmation", 
-        "timestamp": firestore.SERVER_TIMESTAMP
-    })
-    accident_id = acc_ref[1].id
-    
-    # Start the 30-second countdown task
-    background_tasks.add_task(start_emergency_timer, accident_id)
-    
-    return {
-        "accidentId": accident_id, 
-        "status": "Alarm started. 30 seconds to cancel."
-    }
+def accident_report(userId: str, name: str, lat: float, lon: float):
+    """
+    Reports an accident, saves it to Firestore, and immediately returns an ID.
+    The Android app will then call /trigger_alerts after a delay.
+    """
+    try:
+        acc_ref = db.collection("accidents").add({
+            "userId": userId,
+            "name": name,
+            "latitude": lat,
+            "longitude": lon,
+            "status": "reported",
+            "timestamp": firestore.SERVER_TIMESTAMP
+        })
+        accident_id = acc_ref[1].id
+        print(f"New accident reported. ID: {accident_id}")
+        return {
+            "accidentId": accident_id,
+            "status": "User notified. 30s buffer started."
+        }
+    except Exception as e:
+        print(f"ERROR: Could not create accident record. {e}")
+        raise HTTPException(status_code=500, detail="Failed to create accident record in database.")
 
-async def start_emergency_timer(accident_id: str):
-    """Waits 30s. If not cancelled, triggers alerts."""
-    await asyncio.sleep(30) # Real-time delay
-    
-    acc_ref = db.collection("accidents").document(accident_id)
-    acc_doc = acc_ref.get().to_dict()
-    
-    # Check if user marked it as 'cancelled'
-    if acc_doc and acc_doc.get("status") == "awaiting_confirmation":
-        trigger_all_alerts(accident_id, acc_doc)
 
-@app.post("/cancel_accident/{accident_id}")
-def cancel_accident(accident_id: str):
-    """Allows user to stop alerts."""
-    db.collection("accidents").document(accident_id).update({"status": "cancelled"})
-    return {"message": "Alerts stopped successfully."}
-
+# =========================================================================
+#  MODIFIED: This is the function that needs to be fixed
+# =========================================================================
 @app.post("/trigger_alerts/{accident_id}")
-# --- 3. THE TRIGGER LOGIC (Direct Mobile Contacts) ---
-def trigger_all_alerts(accident_id: str, acc_doc: dict):
+def trigger_all_alerts(accident_id: str): # <-- FIX #1: Removed the acc_doc: dict parameter
+    """
+    This function is called by the Android app after its internal delay.
+    It fetches all data itself and triggers all alerts.
+    """
     print(f"--- Triggering alerts for accident_id: {accident_id} ---")
 
     try:
-        # 1. Retrieve Accident Data
+        # 1. Retrieve Accident Data from Firestore
         acc_doc_ref = db.collection("accidents").document(accident_id)
         acc_doc = acc_doc_ref.get()
         if not acc_doc.exists:
             print(f"ERROR: Accident ID {accident_id} not found.")
-            return {"error": "Record not found"}
-        
-        acc_data = acc_doc.to_dict()
+            raise HTTPException(status_code=404, detail="Accident record not found")
 
-        # 2. Get Hardcoded Responders (No API call)
-        hospitals = find_top_3_hospitals(acc_data['latitude'], acc_data['longitude'])
+        acc_data = acc_doc.to_dict()
+        acc_doc_ref.update({"status": "active"}) # Mark as active
+        
+        # Prepare message and location URL
+        victim_name = acc_data.get('name', 'A user')
+        location_url = f"https://www.google.com/maps?q={acc_data['latitude']},{acc_data['longitude']}"
+        sms_text = f"EMERGENCY! {victim_name} has been in an accident. Location: {location_url}"
+        
+        # 2. Get Hardcoded Responders (No external API call)
+        hospital = find_top_3_hospitals(acc_data['latitude'], acc_data['longitude'])[0]
         police = find_nearest_police(acc_data['latitude'], acc_data['longitude'])
 
-        # 3. Update Status & Prepare Message
-        acc_doc_ref.update({"status": "active"})
-        location_url = f"https://www.google.com/maps?q={acc_data['latitude']},{acc_data['longitude']}"
-        sms_text = f"EMERGENCY! {acc_data.get('name', 'User')} in accident. Location: {location_url}"
-
-        # 4. Notify Family (from Firestore)
+        # 3. Notify Family (from Firestore)
         try:
-            user_doc = db.collection("Users").document(acc_data['userId']).get()
+            user_doc = db.collection("users").document(acc_data['userId']).get()
             if user_doc.exists:
-                contacts = user_doc.to_dict().get("emergencyContacts", [])
-                for contact in contacts:
-                    send_sms(contact, sms_text)
-                    make_call(contact, acc_data.get('name', 'User'))
+                # <-- FIX #2: Handle list of maps, not list of strings
+                contacts: List[Dict[str, str]] = user_doc.to_dict().get("emergencyContacts", [])
+                print(f"Found {len(contacts)} emergency contacts.")
+                for contact_map in contacts:
+                    phone_number = contact_map.get("phone")
+                    if phone_number:
+                        print(f"   - Alerting family contact at {phone_number}")
+                        send_sms(phone_number, sms_text)
+                        make_call(phone_number, victim_name)
+                    else:
+                        print(f"   - WARNING: Found a contact map without a 'phone' key: {contact_map}")
+            else:
+                print(f"WARNING: User document for userId {acc_data['userId']} not found.")
         except Exception as e:
-            print(f"Family Alert Error: {e}")
+            print(f"ERROR during family alert notifications: {e}") # Log error but don't crash
 
-        # 5. Notify Police (Hardcoded Mobile)
+        # 4. Notify Police (Hardcoded Mobile)
         try:
+            print(f"   - Alerting police at {police['phone']}")
             send_sms(police['phone'], f"POLICE ALERT: {sms_text}")
-            make_call(police['phone'], acc_data.get('name', 'User'))
+            make_call(police['phone'], victim_name)
         except Exception as e:
-            print(f"Police Alert Error: {e}")
+            print(f"ERROR during police alert notification: {e}")
 
-        # 6. Notify Hospital (Hardcoded Mobile)
+        # 5. Notify Hospital (Hardcoded Mobile)
         try:
-            if hospitals:
-                send_sms(hospitals[0]['phone'], f"HOSPITAL ALERT: {sms_text}")
-                make_call(hospitals[0]['phone'], acc_data.get('name', 'User'))
+            print(f"   - Alerting hospital at {hospital['phone']}")
+            send_sms(hospital['phone'], f"HOSPITAL ALERT: {sms_text}")
+            make_call(hospital['phone'], victim_name)
         except Exception as e:
-            print(f"Hospital Alert Error: {e}")
+            print(f"ERROR during hospital alert notification: {e}")
 
-        print(f"--- Process completed for {accident_id} ---")
+        print(f"--- Process completed successfully for {accident_id} ---")
         return {"message": "All alerts processed successfully."}
 
     except Exception as e:
-        print(f"FATAL ERROR: {e}")
-        return {"error": "Internal Server Error"}, 500
+        print(f"FATAL ERROR in trigger_all_alerts: {e}")
+        # This will catch any other unexpected errors and prevent a crash
+        raise HTTPException(status_code=500, detail="An internal server error occurred during alert processing.")

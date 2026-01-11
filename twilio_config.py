@@ -11,7 +11,6 @@ def send_sms(to_number, body):
     if len(str(to_number)) < 10:
         print(f"Skipping SMS to short code: {to_number}")
         return
-    
     try:
         client.messages.create(
             body=body, 
