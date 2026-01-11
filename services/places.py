@@ -1,51 +1,77 @@
 import requests
 
 def find_nearest_police(lat, lon):
-    """Fetches the nearest police station name and phone number."""
-    # Searching for police within 5km and requesting full tags for phone info
+    """
+    Fetches the nearest police station name and location.
+    Uses your direct call logic (+919342170059) for the phone number 
+    to avoid Twilio short-code crashes.
+    """
     query = f"""
     [out:json];
     node["amenity"="police"](around:5000,{lat},{lon});
     out body;
     """
-    response = requests.post("https://overpass-api.de/api/interpreter", data=query).json()
+    try:
+        # Request data from Overpass API
+        response = requests.post("https://overpass-api.de/api/interpreter", data=query, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("elements"):
+                p = data["elements"][0]
+                tags = p.get("tags", {})
+                return {
+                    "name": tags.get("name", "Local Police Station"),
+                    "phone": "+919342170059", # Direct call for demo
+                    "lat": p["lat"],
+                    "lon": p["lon"]
+                }
+    except Exception as e:
+        print(f"Police Search API Error: {e}")
     
-    if response.get("elements"):
-        p = response["elements"][0]
-        tags = p.get("tags", {})
-        return {
-            "name": tags.get("name", "Local Police Station"),
-            # Tries to get phone tag; falls back to 100 for Chennai
-            "phone": tags.get("phone") or tags.get("contact:phone") or "+919342170059", 
-            "lat": p["lat"],
-            "lon": p["lon"]
-        }
-    return {"name": "Chennai Police Control Room", "phone": "919342170059", "lat": lat, "lon": lon}
+    # Absolute fallback if API fails
+    return {
+        "name": "Chennai Police Control Room", 
+        "phone": "+919342170059", 
+        "lat": lat, 
+        "lon": lon
+    }
 
 def find_top_3_hospitals(lat, lon):
+    """
+    Fetches top 3 hospitals near the accident location.
+    Provides real names for the map markers but safe numbers for Twilio.
+    """
     query = f"""
     [out:json];
     node["amenity"="hospital"](around:5000,{lat},{lon});
     out body;
     """
+    hospitals = []
     try:
         response = requests.post("https://overpass-api.de/api/interpreter", data=query, timeout=10)
-        # Check if the response is actually JSON
+        
         if response.status_code == 200:
             data = response.json()
-        else:
-            return [] # Return empty list if server error
+            for element in data.get("elements", []):
+                tags = element.get("tags", {})
+                hospitals.append({
+                    "name": tags.get("name", "Nearby Hospital"),
+                    # Use a verified 10-digit number for demo or default 108 string
+                    "phone": "+91XXXXXXXXXX", # Replace with your test mobile number
+                    "lat": element["lat"],
+                    "lon": element["lon"]
+                })
     except Exception as e:
-        print(f"Overpass Error: {e}")
-        return [] # Return empty list if request fails
-    
-    hospitals = []
-    for element in data.get("elements", []):
-        tags = element.get("tags", {})
-        hospitals.append({
-            "name": tags.get("name", "Nearby Hospital"),
-            "phone": tags.get("phone") or tags.get("contact:phone") or "108",
-            "lat": element["lat"],
-            "lon": element["lon"]
-        })
+        print(f"Hospital Search API Error: {e}")
+
+    # If no hospitals found or API failed, return a default record
+    if not hospitals:
+        return [{
+            "name": "General Hospital (Emergency)", 
+            "phone": "+91XXXXXXXXXX", 
+            "lat": lat, 
+            "lon": lon
+        }]
+        
     return hospitals[:3]
