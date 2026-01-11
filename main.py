@@ -7,6 +7,7 @@ from typing import List
 # Local imports
 from config import db
 from twilio_config import send_sms, make_call
+from services.places import find_nearest_police, find_top_3_hospitals
 
 app = FastAPI()
 
@@ -69,27 +70,59 @@ def cancel_accident(accident_id: str):
     db.collection("accidents").document(accident_id).update({"status": "cancelled"})
     return {"message": "Alerts stopped successfully."}
 
+@app.post("/trigger_alerts/{accident_id}")
 # --- 3. THE TRIGGER LOGIC (Direct Mobile Contacts) ---
 def trigger_all_alerts(accident_id: str, acc_doc: dict):
-    """Sends SMS and Calls to Family, Police, and Hospital."""
-    db.collection("accidents").document(accident_id).update({"status": "active"})
-    
-    victim_name = acc_doc.get('name', 'User')
-    loc_url = f"http://maps.google.com/maps?q={acc_doc['latitude']},{acc_doc['longitude']}"
-    msg = f"EMERGENCY: {victim_name} had an accident. Location: {loc_url}"
+    print(f"--- Triggering alerts for accident_id: {accident_id} ---")
 
-    # 1. Family (from Firestore)
-    user_doc = db.collection("Users").document(acc_doc['userId']).get()
-    if user_doc.exists:
-        user = user_doc.to_dict()
-        for contact in user.get("emergencyContacts", []):
-            send_sms(contact, msg)
-            make_call(contact, victim_name)
+    try:
+        # 1. Retrieve Accident Data
+        acc_doc_ref = db.collection("accidents").document(accident_id)
+        acc_doc = acc_doc_ref.get()
+        if not acc_doc.exists:
+            print(f"ERROR: Accident ID {accident_id} not found.")
+            return {"error": "Record not found"}
+        
+        acc_data = acc_doc.to_dict()
 
-    # 2. Police (Hardcoded Mobile)
-    send_sms(POLICE_MOBILE, f"POLICE ALERT: {msg}")
-    make_call(POLICE_MOBILE, victim_name)
+        # 2. Get Hardcoded Responders (No API call)
+        hospitals = find_top_3_hospitals(acc_data['latitude'], acc_data['longitude'])
+        police = find_nearest_police(acc_data['latitude'], acc_data['longitude'])
 
-    # 3. Hospital (Hardcoded Mobile)
-    send_sms(HOSPITAL_MOBILE, f"HOSPITAL ALERT: {msg}")
-    make_call(HOSPITAL_MOBILE, victim_name)
+        # 3. Update Status & Prepare Message
+        acc_doc_ref.update({"status": "active"})
+        location_url = f"https://www.google.com/maps?q={acc_data['latitude']},{acc_data['longitude']}"
+        sms_text = f"EMERGENCY! {acc_data.get('name', 'User')} in accident. Location: {location_url}"
+
+        # 4. Notify Family (from Firestore)
+        try:
+            user_doc = db.collection("Users").document(acc_data['userId']).get()
+            if user_doc.exists:
+                contacts = user_doc.to_dict().get("emergencyContacts", [])
+                for contact in contacts:
+                    send_sms(contact, sms_text)
+                    make_call(contact, acc_data.get('name', 'User'))
+        except Exception as e:
+            print(f"Family Alert Error: {e}")
+
+        # 5. Notify Police (Hardcoded Mobile)
+        try:
+            send_sms(police['phone'], f"POLICE ALERT: {sms_text}")
+            make_call(police['phone'], acc_data.get('name', 'User'))
+        except Exception as e:
+            print(f"Police Alert Error: {e}")
+
+        # 6. Notify Hospital (Hardcoded Mobile)
+        try:
+            if hospitals:
+                send_sms(hospitals[0]['phone'], f"HOSPITAL ALERT: {sms_text}")
+                make_call(hospitals[0]['phone'], acc_data.get('name', 'User'))
+        except Exception as e:
+            print(f"Hospital Alert Error: {e}")
+
+        print(f"--- Process completed for {accident_id} ---")
+        return {"message": "All alerts processed successfully."}
+
+    except Exception as e:
+        print(f"FATAL ERROR: {e}")
+        return {"error": "Internal Server Error"}, 500
