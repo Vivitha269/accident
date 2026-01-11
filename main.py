@@ -1,30 +1,31 @@
 import asyncio
-from fastapi import FastAPI, Request, BackgroundTasks
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from fastapi import FastAPI, BackgroundTasks
+from firebase_admin import firestore
 from pydantic import BaseModel
 from typing import List
-from firebase_admin import firestore
 
+# Local imports
 from config import db
 from twilio_config import send_sms, make_call
-from services.places import find_top_3_hospitals, find_nearest_police
 
 app = FastAPI()
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="static")
+# --- 🚀 REPLACE THESE WITH YOUR TWO TEST MOBILE NUMBERS ---
+POLICE_MOBILE = "+919342170059"  # First test phone
+HOSPITAL_MOBILE = "+917338903743" # Second test phone
 
 @app.get("/")
 def home():
-    return {"status": "Accident API Live", "mode": "Direct Contact (No API)"}
+    """Health check for Render."""
+    return {"status": "Accident Detection API Live", "mode": "Safe Demo"}
 
-# --- 1. REGISTRATION & CONTACTS ---
+# --- 1. USER CONTACT REGISTRATION ---
 class ContactUpdate(BaseModel):
     Contacts: List[str]
 
 @app.post("/contacts")
 def add_contacts(userId: str, data: ContactUpdate):
+    """Saves family contacts to Firestore."""
     user_ref = db.collection("Users").document(userId)
     user_ref.update({"emergencyContacts": data.Contacts})
     return {"message": "Emergency contacts saved"}
@@ -32,53 +33,63 @@ def add_contacts(userId: str, data: ContactUpdate):
 # --- 2. ACCIDENT FLOW WITH 30s ALARM ---
 @app.post("/accident")
 async def accident_report(userId: str, name: str, lat: float, lon: float, background_tasks: BackgroundTasks):
-    # Save to Firestore
+    """Reports accident and starts 30-second background timer."""
     acc_ref = db.collection("accidents").add({
-        "userId": userId, "name": name, "latitude": lat, "longitude": lon,
-        "status": "awaiting_confirmation", "timestamp": firestore.SERVER_TIMESTAMP
+        "userId": userId, 
+        "name": name, 
+        "latitude": lat, 
+        "longitude": lon,
+        "status": "awaiting_confirmation", 
+        "timestamp": firestore.SERVER_TIMESTAMP
     })
     accident_id = acc_ref[1].id
     
-    # Start background timer
+    # Start the 30-second countdown task
     background_tasks.add_task(start_emergency_timer, accident_id)
-    return {"accidentId": accident_id, "status": "30s alarm active"}
+    
+    return {
+        "accidentId": accident_id, 
+        "status": "Alarm started. 30 seconds to cancel."
+    }
 
 async def start_emergency_timer(accident_id: str):
-    await asyncio.sleep(30)
+    """Waits 30s. If not cancelled, triggers alerts."""
+    await asyncio.sleep(30) # Real-time delay
+    
     acc_ref = db.collection("accidents").document(accident_id)
     acc_doc = acc_ref.get().to_dict()
     
-    # Only trigger if user hasn't cancelled
+    # Check if user marked it as 'cancelled'
     if acc_doc and acc_doc.get("status") == "awaiting_confirmation":
         trigger_all_alerts(accident_id, acc_doc)
 
 @app.post("/cancel_accident/{accident_id}")
 def cancel_accident(accident_id: str):
+    """Allows user to stop alerts."""
     db.collection("accidents").document(accident_id).update({"status": "cancelled"})
-    return {"message": "Alerts stopped"}
+    return {"message": "Alerts stopped successfully."}
 
-# --- 3. THE TRIGGER LOGIC (Direct Mobile Numbers) ---
+# --- 3. THE TRIGGER LOGIC (Direct Mobile Contacts) ---
 def trigger_all_alerts(accident_id: str, acc_doc: dict):
-    # Get hardcoded responders from places.py
-    hospitals = find_top_3_hospitals(acc_doc['latitude'], acc_doc['longitude'])
-    police = find_nearest_police(acc_doc['latitude'], acc_doc['longitude'])
-    
-    location_url = f"https://www.google.com/maps?q={acc_doc['latitude']},{acc_doc['longitude']}"
+    """Sends SMS and Calls to Family, Police, and Hospital."""
     db.collection("accidents").document(accident_id).update({"status": "active"})
-
+    
     victim_name = acc_doc.get('name', 'User')
-    alert_msg = f"ALERT: Accident detected for {victim_name}. Location: {location_url}"
+    loc_url = f"http://maps.google.com/maps?q={acc_doc['latitude']},{acc_doc['longitude']}"
+    msg = f"EMERGENCY: {victim_name} had an accident. Location: {loc_url}"
 
-    # 1. Family Notification
-    user = db.collection("Users").document(acc_doc['userId']).get().to_dict()
-    for contact in user.get("emergencyContacts", []):
-        send_sms(contact, alert_msg)
-        make_call(contact, victim_name)
+    # 1. Family (from Firestore)
+    user_doc = db.collection("Users").document(acc_doc['userId']).get()
+    if user_doc.exists:
+        user = user_doc.to_dict()
+        for contact in user.get("emergencyContacts", []):
+            send_sms(contact, msg)
+            make_call(contact, victim_name)
 
-    # 2. Police Notification (Mobile Number)
-    send_sms(police['phone'], f"POLICE: {alert_msg}")
-    make_call(police['phone'], victim_name)
+    # 2. Police (Hardcoded Mobile)
+    send_sms(POLICE_MOBILE, f"POLICE ALERT: {msg}")
+    make_call(POLICE_MOBILE, victim_name)
 
-    # 3. Hospital Notification (Mobile Number)
-    send_sms(hospitals[0]['phone'], f"HOSPITAL: {alert_msg}")
-    make_call(hospitals[0]['phone'], victim_name)
+    # 3. Hospital (Hardcoded Mobile)
+    send_sms(HOSPITAL_MOBILE, f"HOSPITAL ALERT: {msg}")
+    make_call(HOSPITAL_MOBILE, victim_name)
