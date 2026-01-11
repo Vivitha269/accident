@@ -16,27 +16,34 @@ def find_nearest_police(lat, lon):
         return {
             "name": tags.get("name", "Local Police Station"),
             # Tries to get phone tag; falls back to 100 for Chennai
-            "phone": tags.get("phone") or tags.get("contact:phone") or "100", 
+            "phone": tags.get("phone") or tags.get("contact:phone") or "+919342170059", 
             "lat": p["lat"],
             "lon": p["lon"]
         }
-    return {"name": "Chennai Police Control Room", "phone": "100", "lat": lat, "lon": lon}
+    return {"name": "Chennai Police Control Room", "phone": "919342170059", "lat": lat, "lon": lon}
 
 def find_top_3_hospitals(lat, lon):
-    """Fetches hospitals with their specific contact numbers."""
     query = f"""
     [out:json];
     node["amenity"="hospital"](around:5000,{lat},{lon});
     out body;
     """
-    response = requests.post("https://overpass-api.de/api/interpreter", data=query).json()
-    hospitals = []
+    try:
+        response = requests.post("https://overpass-api.de/api/interpreter", data=query, timeout=10)
+        # Check if the response is actually JSON
+        if response.status_code == 200:
+            data = response.json()
+        else:
+            return [] # Return empty list if server error
+    except Exception as e:
+        print(f"Overpass Error: {e}")
+        return [] # Return empty list if request fails
     
-    for element in response.get("elements", []):
+    hospitals = []
+    for element in data.get("elements", []):
         tags = element.get("tags", {})
         hospitals.append({
             "name": tags.get("name", "Nearby Hospital"),
-            # Tries to get phone tag; falls back to 108 for Chennai
             "phone": tags.get("phone") or tags.get("contact:phone") or "108",
             "lat": element["lat"],
             "lon": element["lon"]
