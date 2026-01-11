@@ -1,11 +1,12 @@
 import asyncio
 import logging
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Request, Query
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from firebase_admin import firestore
 from pydantic import BaseModel, field_validator
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -20,6 +21,9 @@ from services.routing import get_route
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
+
+# Mount static files directory
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 # ============================================================================
@@ -274,13 +278,16 @@ def accept_emergency(accident_id: str, hospital_name: str):
 # ============================================================================
 
 @app.get("/accident")
-def accident(query: LocationQuery):
+def accident(
+    lat: float = Query(..., description="Latitude of the accident location", ge=-90, le=90),
+    lon: float = Query(..., description="Longitude of the accident location", ge=-180, le=180)
+):
     """Get accident location details, nearest hospital, and route."""
     try:
-        address = reverse_geocode(query.lat, query.lon)
-        hospitals = find_top_3_hospitals(query.lat, query.lon)
+        address = reverse_geocode(lat, lon)
+        hospitals = find_top_3_hospitals(lat, lon)
         hospital = hospitals[0]
-        route = get_route(query.lat, query.lon, hospital["lat"], hospital["lon"])
+        route = get_route(lat, lon, hospital["lat"], hospital["lon"])
 
         return {
             "accident_location": address,
