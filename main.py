@@ -1,6 +1,8 @@
 import asyncio
 import logging
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import HTMLResponse
 from firebase_admin import firestore
 from pydantic import BaseModel, field_validator
 from typing import List, Dict
@@ -13,9 +15,16 @@ logger = logging.getLogger(__name__)
 from config import db
 from twilio_config import send_sms, make_call
 from services.places import find_nearest_police, find_top_3_hospitals
+from services.geocoding import reverse_geocode
+from services.routing import get_route
 
 app = FastAPI()
+templates = Jinja2Templates(directory="templates")
 
+
+# ============================================================================
+# Pydantic Models
+# ============================================================================
 
 class AccidentReport(BaseModel):
     """Pydantic model for accident reporting with validation."""
@@ -39,12 +48,40 @@ class AccidentReport(BaseModel):
         return v
 
 
+class LocationQuery(BaseModel):
+    """Pydantic model for location queries with validation."""
+    lat: float
+    lon: float
+
+    @field_validator('lat')
+    @classmethod
+    def validate_lat(cls, v):
+        if not -90 <= v <= 90:
+            raise ValueError('Latitude must be between -90 and 90')
+        return v
+
+    @field_validator('lon')
+    @classmethod
+    def validate_lon(cls, v):
+        if not -180 <= v <= 180:
+            raise ValueError('Longitude must be between -180 and 180')
+        return v
+
+
+# ============================================================================
+# Health Check Endpoints
+# ============================================================================
+
 @app.get("/")
 def home():
     """Health check for Render."""
-    return {"status": "Accident Detection API Live", "mode": "Safe Demo"}
+    return {"status": "Accident Detection API Live", "mode": "Full API"}
 
-# --- ACCIDENT REPORTING ---
+
+# ============================================================================
+# Accident Reporting Endpoints
+# ============================================================================
+
 @app.post("/accident")
 def accident_report(report: AccidentReport):
     """
@@ -71,11 +108,8 @@ def accident_report(report: AccidentReport):
         raise HTTPException(status_code=500, detail="Failed to create accident record in database.")
 
 
-# =========================================================================
-#  MODIFIED: This is the function that needs to be fixed
-# =========================================================================
 @app.post("/trigger_alerts/{accident_id}")
-def trigger_all_alerts(accident_id: str): # <-- FIX #1: Removed the acc_doc: dict parameter
+def trigger_all_alerts(accident_id: str):
     """
     This function is called by the Android app after its internal delay.
     It fetches all data itself and triggers all alerts.
@@ -102,7 +136,7 @@ def trigger_all_alerts(accident_id: str): # <-- FIX #1: Removed the acc_doc: dic
         hospital = find_top_3_hospitals(acc_data['latitude'], acc_data['longitude'])[0]
         police = find_nearest_police(acc_data['latitude'], acc_data['longitude'])
 
-# 3. Notify Family (from Firestore)
+        # 3. Notify Family (from Firestore)
         try:
             user_doc = db.collection("users").document(acc_data['userId']).get()
             if user_doc.exists:
@@ -181,9 +215,6 @@ def trigger_all_alerts(accident_id: str): # <-- FIX #1: Removed the acc_doc: dic
         raise HTTPException(status_code=500, detail="An internal server error occurred during alert processing.")
 
 
-# =========================================================================
-#  NEW ENDPOINT: Accept and Dispatch Ambulance
-# =========================================================================
 @app.post("/accept_emergency/{accident_id}")
 def accept_emergency(accident_id: str, hospital_name: str):
     """
@@ -236,3 +267,48 @@ def accept_emergency(accident_id: str, hospital_name: str):
     except Exception as e:
         print(f"ERROR in accept_emergency: {e}")
         raise HTTPException(status_code=500, detail="Failed to process emergency acceptance.")
+
+
+# ============================================================================
+# Location and Map Endpoints
+# ============================================================================
+
+@app.get("/accident")
+def accident(query: LocationQuery):
+    """Get accident location details, nearest hospital, and route."""
+    try:
+        address = reverse_geocode(query.lat, query.lon)
+        hospitals = find_top_3_hospitals(query.lat, query.lon)
+        hospital = hospitals[0]
+        route = get_route(query.lat, query.lon, hospital["lat"], hospital["lon"])
+
+        return {
+            "accident_location": address,
+            "nearest_hospital": hospital,
+            "alternative_hospitals": hospitals[1:],
+            "route": route
+        }
+    except Exception as e:
+        logger.error(f"Error in accident endpoint: {e}")
+        raise HTTPException(status_code=500, detail="Failed to process accident data")
+
+
+@app.get("/map", response_class=HTMLResponse)
+def show_map(request: Request, lat: float, lon: float, accident_id: str = None, name: str = "Unknown", status: str = "pending"):
+    """Show map with accident location."""
+    # Validate coordinates
+    if not -90 <= lat <= 90 or not -180 <= lon <= 180:
+        raise HTTPException(status_code=400, detail="Invalid coordinates")
+
+    return templates.TemplateResponse(
+        "map.html",
+        {
+            "request": request,
+            "lat": lat,
+            "lon": lon,
+            "accident_id": accident_id or "",
+            "name": name,
+            "status": status
+        }
+    )
+
