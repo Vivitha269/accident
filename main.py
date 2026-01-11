@@ -14,6 +14,10 @@ from services.places import find_top_3_hospitals, find_nearest_police
 
 app = FastAPI()
 
+@app.get("/")
+def home():
+    return {"status": "Accident Detection API is Live", "version": "1.0"}
+
 # Mount static folder for map.html
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="static")
@@ -102,37 +106,42 @@ def cancel_accident(accident_id: str):
     acc_ref.update({"status": "cancelled"})
     return {"message": "Emergency alerts cancelled. You are safe!"}
 
+
 def trigger_all_alerts(accident_id: str, acc_doc: dict):
-    """Internal logic to find responders and send SMS/Calls."""
     hospitals = find_top_3_hospitals(acc_doc['latitude'], acc_doc['longitude'])
     police = find_nearest_police(acc_doc['latitude'], acc_doc['longitude'])
     location_url = f"https://www.google.com/maps?q={acc_doc['latitude']},{acc_doc['longitude']}"
     
     db.collection("accidents").document(accident_id).update({"status": "active"})
-
-    victim_name = acc_doc['name']
+    victim_name = acc_doc.get('name', 'User')
     alert_msg = f"URGENT: Accident for {victim_name}. Location: {location_url}"
     
-    # 1. Family Alerts (SMS + Call)
+    # 1. Family Alerts (Safe - usually full numbers)
     user = db.collection("Users").document(acc_doc['userId']).get().to_dict()
     for contact in user.get("emergencyContacts", []):
-        send_sms(contact, alert_msg)
-        make_call(contact, victim_name)
+        try:
+            send_sms(contact, alert_msg)
+            make_call(contact, victim_name)
+        except Exception as e:
+            print(f"Family Alert Failed: {e}")
 
-    # 2. Police Notification (Call ONLY - to avoid Short Code error)
-    if police:
-        # Only send SMS if the phone number is longer than 5 digits
-        if len(police['phone']) > 5:
-            send_sms(police['phone'], alert_msg)
-        make_call(police['phone'], victim_name)
+    # 2. Police & Hospital (Smarter Logic)
+    responders = []
+    if police: responders.append(police)
+    if hospitals: responders.extend(hospitals)
 
-    # 3. Hospital Notification
-    if hospitals:
-        nearest_hosp = hospitals[0]
-        # Only send SMS if it's a real mobile/landline number, not '108'
-        if len(nearest_hosp['phone']) > 5:
-            send_sms(nearest_hosp['phone'], alert_msg)
-        make_call(nearest_hosp['phone'], victim_name)
+    for resp in responders:
+        phone = str(resp.get('phone', ''))
+        try:
+            # ONLY send SMS if number is long (prevents Short Code Error)
+            if len(phone) >= 10:
+                send_sms(phone, alert_msg)
+            
+            # Always try to Call (Twilio Voice handles short codes better than SMS)
+            make_call(phone, victim_name)
+        except Exception as e:
+            print(f"Responder Alert failed for {phone}: {e}")
+
 
 # --- 4. HOSPITAL COORDINATION ---
 @app.get("/map/{accident_id}")
