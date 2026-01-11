@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Emergency Dashboard</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { font-family: sans-serif; padding: 20px; background: #f0f0f0; }
+        #map { height: 400px; width: 100%; border-radius: 10px; border: 2px solid red; }
+        .btn-accept { width: 100%; padding: 20px; background: #28a745; color: white; border: none; font-size: 1.5rem; cursor: pointer; margin-top: 10px; }
+        .info { background: white; padding: 15px; margin-bottom: 10px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>🚨 ACCIDENT ALERT: {{ name }}</h1>
+    <div class="info">
+        <p><strong>Location:</strong> {{ lat }}, {{ lon }}</p>
+        <p><strong>Status:</strong> {{ status }}</p>
+    </div>
+    <div id="map"></div>
+    <button class="btn-accept" onclick="acceptEmergency()">ACCEPT & DISPATCH AMBULANCE</button>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        var lat = {lat };
+        var lon = { lon };
+        var accidentId = "{{ accident_id }}";
+        
+        var map = L.map("map").setView([lat, lon], 15);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+        L.marker([lat, lon]).addTo(map).bindPopup("Accident Site").openPopup();
+
+        async function acceptEmergency() {
+            var hName = prompt("Enter Hospital Name:");
+            if (!hName) return;
+            var res = await fetch("/accept_emergency/" + accidentId + "?hospital_name=" + encodeURIComponent(hName), { method: "POST" });
+            var data = await res.json();
+            alert(data.status || data.error);
+        }
+    </script>
+</body>
+</html>
+
