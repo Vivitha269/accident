@@ -77,6 +77,7 @@ class LocationQuery(BaseModel):
 # ============================================================================
 
 @app.get("/")
+@app.head("/")
 def home():
     """Health check for Render."""
     return {"status": "Accident Detection API Live", "mode": "Full API"}
