@@ -51,23 +51,38 @@ def send_sms(to_number, body):
     except Exception as e:
         print(f"Twilio SMS Error: {e}")
 
-def make_call(to_number, victim_name="User"):
+def make_call(to_number, victim_name="User", location_info=None):
     """
     Make voice call with proper validation to prevent Short Code errors.
+    Includes location details in the voice message for better emergency response.
+    
+    Args:
+        to_number: The phone number to call
+        victim_name: Name of the victim
+        location_info: Dictionary with 'address' and 'maps_url' keys
     """
     # Validate phone number before attempting to call
     if not is_valid_phone_number(to_number):
         print(f"Skipping call to invalid number: {to_number}")
         return
     
-    # TwiML logic that speaks immediately
-    twiml_content = f"""
+    # Build location details for voice message
+    location_text = ""
+    if location_info:
+        address = location_info.get('address', 'Unknown location')
+        maps_url = location_info.get('maps_url', '')
+        location_text = f" The accident location is {address}. Google maps link: {maps_url}"
+    
+    # TwiML logic that speaks the full emergency details
+    twiml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
     <Response>
         <Pause length="1"/>
-        <Speak voice="alice">
+        <Say voice="alice" language="en-US">
             Emergency alert! {victim_name} has been in an accident. 
-            Location details have been sent via SMS. Please help immediately.
-        </Speak>
+            This is an urgent emergency call. Please respond immediately.
+            {location_text}
+            Please send help to this location right away. This is a life threatening emergency.
+        </Say>
     </Response>
     """
     try:
@@ -77,5 +92,6 @@ def make_call(to_number, victim_name="User"):
             to=to_number
         )
         print(f"Call initiated successfully to {to_number}")
+        print(f"Voice message includes: {location_text[:100]}...")
     except Exception as e:
         print(f"Twilio Call Error: {e}")

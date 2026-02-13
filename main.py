@@ -132,12 +132,25 @@ def trigger_all_alerts(accident_id: str):
         acc_data = acc_doc.to_dict()
         acc_doc_ref.update({"status": "active"}) # Mark as active
         
-        # Prepare message and location URL
+        # Prepare message with actual address
         victim_name = acc_data.get('name', 'A user')
-        location_url = f"https://www.google.com/maps?q={acc_data['latitude']},{acc_data['longitude']}"
-        sms_text = f"EMERGENCY! {victim_name} has been in an accident. Location: {location_url}"
+        lat = acc_data['latitude']
+        lon = acc_data['longitude']
         
-        # 2. Get Hardcoded Responders (No external API call)
+        # Get human-readable address
+        address = reverse_geocode(lat, lon)
+        location_url = f"https://www.google.com/maps?q={lat},{lon}"
+        
+        # SMS with full address + Google Maps link
+        sms_text = f"🚨 EMERGENCY! {victim_name} has been in an accident.\n📍 Address: {address}\n🗺️ Maps: {location_url}"
+        
+        # Location info for voice calls
+        location_info = {
+            "address": address,
+            "maps_url": location_url
+        }
+        
+        # 2. Get Responders from Overpass API (real locations)
         hospital = find_top_3_hospitals(acc_data['latitude'], acc_data['longitude'])[0]
         police = find_nearest_police(acc_data['latitude'], acc_data['longitude'])
 
@@ -185,7 +198,7 @@ def trigger_all_alerts(accident_id: str):
                     if phone_number:
                         print(f"   - Alerting family contact at {phone_number}")
                         send_sms(phone_number, sms_text)
-                        make_call(phone_number, victim_name)
+                        make_call(phone_number, victim_name, location_info)
                     else:
                         print(f"   - WARNING: Contact map without valid phone key: {contact_map}")
             else:
@@ -195,19 +208,23 @@ def trigger_all_alerts(accident_id: str):
             import traceback
             traceback.print_exc()
 
-        # 4. Notify Police (Hardcoded Mobile)
+        # 4. Notify Police (from Overpass API)
         try:
             print(f"   - Alerting police at {police['phone']}")
-            send_sms(police['phone'], f"POLICE ALERT: {sms_text}")
-            make_call(police['phone'], victim_name)
+            police_address = police.get('address', 'Unknown police station')
+            police_sms = f"POLICE ALERT: {victim_name} has been in an accident.\n📍 Location: {address}\n🗺️ Maps: {location_url}\n📍 Police Station: {police_address}"
+            send_sms(police['phone'], police_sms)
+            make_call(police['phone'], victim_name, location_info)
         except Exception as e:
             print(f"ERROR during police alert notification: {e}")
 
-        # 5. Notify Hospital (Hardcoded Mobile)
+        # 5. Notify Hospital (from Overpass API)
         try:
             print(f"   - Alerting hospital at {hospital['phone']}")
-            send_sms(hospital['phone'], f"HOSPITAL ALERT: {sms_text}")
-            make_call(hospital['phone'], victim_name)
+            hospital_address = hospital.get('address', 'Unknown hospital')
+            hospital_sms = f"HOSPITAL ALERT: {victim_name} has been in an accident.\n📍 Location: {address}\n🗺️ Maps: {location_url}\n🏥 Hospital: {hospital_address}"
+            send_sms(hospital['phone'], hospital_sms)
+            make_call(hospital['phone'], victim_name, location_info)
         except Exception as e:
             print(f"ERROR during hospital alert notification: {e}")
 
@@ -249,7 +266,7 @@ def accept_emergency(accident_id: str, hospital_name: str):
             "dispatch_timestamp": firestore.SERVER_TIMESTAMP
         })
 
-        print(f"✅ Emergency accepted for {accident_id}. Dispatching: {hospital_name}")
+        print(f" Emergency accepted for {accident_id}. Dispatching: {hospital_name}")
 
         # Notify victim if phone available
         if victim_phone:

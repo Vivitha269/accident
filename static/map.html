@@ -5,28 +5,195 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         body { font-family: sans-serif; padding: 20px; background: #f0f0f0; }
-        #map { height: 400px; width: 100%; border-radius: 10px; border: 2px solid red; }
+        #map { height: 500px; width: 100%; border-radius: 10px; border: 2px solid red; }
         .btn-accept { width: 100%; padding: 20px; background: #28a745; color: white; border: none; font-size: 1.5rem; cursor: pointer; margin-top: 10px; }
+        .info-panel { background: white; padding: 15px; margin-top: 10px; border-radius: 10px; }
+        .route-info { margin: 5px 0; padding: 10px; background: #f8f9fa; border-radius: 5px; }
+        .police-route { border-left: 4px solid #2196F3; }
+        .hospital-route { border-left: 4px solid #f44336; }
     </style>
 </head>
 <body>
-    <h1>🚨 ACCIDENT ALERT: {{ name }}</h1>
+    <h1>ACCIDENT ALERT: {{ name }}</h1>
     <div id="map"></div>
+    <div class="info-panel">
+        <h3>Route Information</h3>
+        <div id="route-info">Loading routes...</div>
     <button class="btn-accept" onclick="acceptEmergency()">ACCEPT & DISPATCH AMBULANCE</button>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        var map = L.map('map').setView([{ lat }, { lon }], 15);
+        // Get coordinates from server-side template variables
+        var accidentLat = parseFloat("{{ lat }}");
+        var accidentLon = parseFloat("{{ lon }}");
+        var accidentName = "{{ name }}";
+        var accidentId = "{{ accident_id }}";
+        
+        var map = L.map('map').setView([accidentLat, accidentLon], 14);
+        
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
-        L.marker([{ lat }, { lon }]).addTo(map).bindPopup("Accident Site").openPopup();
+        
+        // Add accident marker (red)
+        var accidentMarker = L.marker([accidentLat, accidentLon], {
+            icon: L.icon({
+                iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+                shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                iconSize: [25, 41],
+                iconAnchor: [12, 41],
+                popupAnchor: [1, -34],
+                shadowSize: [41, 41]
+            })
+        }).addTo(map).bindPopup("<b>Accident Location</b><br>" + accidentName).openPopup();
+
+        // Fetch route data from API
+        async function fetchRoutes() {
+            try {
+                var url = "/accident?lat=" + accidentLat + "&lon=" + accidentLon;
+                var response = await fetch(url);
+                var data = await response.json();
+                
+                displayRouteInfo(data);
+                
+                // Draw routes if available
+                if (data.route && data.route.geometry) {
+                    drawRoute(data.route.geometry, '#f44336', 'Hospital Route');
+                }
+                
+                // Add markers for hospital
+                if (data.nearest_hospital) {
+                    addHospitalMarker(data.nearest_hospital);
+                }
+                
+                updateRouteInfoText(data);
+                
+            } catch (error) {
+                console.error('Error fetching route:', error);
+                document.getElementById('route-info').innerHTML = 'Error loading route information';
+            }
+        }
+        
+        function displayRouteInfo(data) {
+            var html = '';
+            
+            if (data.nearest_hospital) {
+                var h = data.nearest_hospital;
+                html = html + '<div class="route-info hospital-route">';
+                html = html + '<b>Nearest Hospital:</b> ' + h.name + '<br>';
+                html = html + '<b>Phone:</b> ' + h.phone + '<br>';
+                if (h.address) {
+                    html = html + '<b>Address:</b> ' + h.address + '<br>';
+                }
+                html = html + '</div>';
+            }
+            
+            if (data.route) {
+                html = html + '<div class="route-info">';
+                html = html + '<b>Distance:</b> ' + data.route.distance_km.toFixed(2) + ' km<br>';
+                html = html + '<b>Duration:</b> ' + data.route.duration_min.toFixed(1) + ' minutes';
+                html = html + '</div>';
+            }
+            
+            if (html === '') {
+                html = 'No route information available';
+            }
+            
+            document.getElementById('route-info').innerHTML = html;
+        }
+        
+        function updateRouteInfoText(data) {
+            var html = document.getElementById('route-info').innerHTML;
+            
+            html = html + '<div class="route-info police-route">';
+            html = html + '<b>Police:</b> Notified<br>';
+            html = html + '<b>Police Station:</b> Local Police Station';
+            html = html + '</div>';
+            
+            document.getElementById('route-info').innerHTML = html;
+        }
+        
+        function addHospitalMarker(hospital) {
+            var hospitalIcon = L.icon({
+                iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+                shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                iconSize: [25, 41],
+                iconAnchor: [12, 41],
+                popupAnchor: [1, -34],
+                shadowSize: [41, 41]
+            });
+            
+            L.marker([hospital.lat, hospital.lon], {icon: hospitalIcon})
+                .addTo(map)
+                .bindPopup('<b>' + hospital.name + '</b><br>' + hospital.phone)
+                .on('click', function() {
+                    map.setView([hospital.lat, hospital.lon], 14);
+                });
+            
+            // Draw route to hospital
+            drawRouteToPoint(hospital.lat, hospital.lon, '#f44336');
+        }
+        
+        function drawRouteToPoint(endLat, endLon, color) {
+            // Use OSRM to get route
+            var routeUrl = 'https://router.project-osrm.org/route/v1/driving/' + accidentLon + ',' + accidentLat + ';' + endLon + ',' + endLat + '?overview=full&geometries=geojson';
+            
+            fetch(routeUrl)
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (data.code === 'Ok') {
+                        var route = data.routes[0];
+                        var geojson = {
+                            type: 'Feature',
+                            properties: {},
+                            geometry: route.geometry
+                        };
+                        
+                        L.geoJSON(geojson, {
+                            style: {
+                                color: color,
+                                weight: 5,
+                                opacity: 0.7
+                            }
+                        }).addTo(map);
+                        
+                        // Fit bounds to show entire route
+                        var coords = route.geometry.coordinates;
+                        var bounds = L.latLngBounds(coords.map(function(c) { return [c[1], c[0]]; }));
+                        map.fitBounds(bounds, {padding: [50, 50]});
+                        
+                        // Update distance info
+                        var distanceKm = route.distance / 1000;
+                        var durationMin = route.duration / 60;
+                        console.log('Route: ' + distanceKm.toFixed(2) + ' km, ' + durationMin.toFixed(1) + ' min');
+                    }
+                })
+                .catch(function(error) { console.error('Route error:', error); });
+        }
+        
+        function drawRoute(geometry, color, name) {
+            L.geoJSON({
+                type: 'Feature',
+                properties: {name: name},
+                geometry: geometry
+            }, {
+                style: {
+                    color: color,
+                    weight: 5,
+                    opacity: 0.7
+                }
+            }).addTo(map);
+        }
 
         async function acceptEmergency() {
-            const hName = prompt("Enter Hospital Name:");
+            var hName = prompt("Enter Hospital Name:");
             if (!hName) return;
-            const res = await fetch(`/accept_emergency/{{ accident_id }}?hospital_name=` + encodeURIComponent(hName), { method: 'POST' });
-            const data = await res.json();
+            var url = '/accept_emergency/' + accidentId + '?hospital_name=' + encodeURIComponent(hName);
+            var res = await fetch(url, { method: 'POST' });
+            var data = await res.json();
             alert(data.status || data.error);
         }
+        
+        // Initialize
+        fetchRoutes();
     </script>
 </body>
 </html>
