@@ -14,10 +14,14 @@ logger = logging.getLogger(__name__)
 
 # Local imports
 from config import db
-from twilio_config import send_sms, make_call
+from twilio_config import (
+    send_sms, make_call, play_alarm, speed_alert_alarm,
+    send_sms_to_family, send_sms_to_police, send_sms_to_hospital,
+    send_pickup_confirmation
+)
 from services.places import find_nearest_police, find_top_3_hospitals
 from services.geocoding import reverse_geocode
-from services.routing import get_route
+from services.routing import get_route, get_directions_text
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
@@ -336,4 +340,198 @@ def show_map(request: Request, lat: float, lon: float, accident_id: str = None, 
             "status": status
         }
     )
+
+
+# ============================================================================
+# Speed Alert Endpoints
+# ============================================================================
+
+@app.post("/speed_alert")
+def speed_alert(
+    user_id: str = Query(..., description="User ID"),
+    phone_number: str = Query(..., description="Phone number to alert"),
+    lat: float = Query(..., description="Latitude of accident zone", ge=-90, le=90),
+    lon: float = Query(..., description="Longitude of accident zone", ge=-180, le=180),
+    speed: float = Query(..., description="Current speed in km/h")
+):
+    """
+    Alert a user when they are speeding through an accident zone.
+    Triggers an alarm call to warn them about the accident zone.
+    """
+    try:
+        # Get address of the accident zone
+        address = reverse_geocode(lat, lon)
+        
+        print(f"⚠️ SPEED ALERT: User {user_id} at {speed} km/h near accident zone at {address}")
+        
+        # Prepare location info for the alert
+        location_info = {
+            "address": address,
+            "maps_url": f"https://www.google.com/maps?q={lat},{lon}"
+        }
+        
+        # Trigger speed alert alarm call
+        speed_alert_alarm(phone_number, location_info)
+        
+        return {
+            "status": "success",
+            "message": f"Speed alert sent to {phone_number}. Warning about accident zone at {address}",
+            "zone_location": address,
+            "detected_speed": speed
+        }
+        
+    except Exception as e:
+        print(f"ERROR in speed_alert: {e}")
+        raise HTTPException(status_code=500, detail="Failed to send speed alert")
+
+
+@app.post("/trigger_alarm/{accident_id}")
+def trigger_alarm(accident_id: str):
+    """
+    Trigger emergency alarm for an accident to alert everyone nearby.
+    """
+    try:
+        # Get accident data
+        acc_doc_ref = db.collection("accidents").document(accident_id)
+        acc_doc = acc_doc_ref.get()
+        
+        if not acc_doc.exists:
+            raise HTTPException(status_code=404, detail="Accident record not found")
+        
+        acc_data = acc_doc.to_dict()
+        victim_name = acc_data.get('name', 'A user')
+        lat = acc_data['latitude']
+        lon = acc_data['longitude']
+        
+        # Get address
+        address = reverse_geocode(lat, lon)
+        location_url = f"https://www.google.com/maps?q={lat},{lon}"
+        
+        location_info = {
+            "address": address,
+            "maps_url": location_url
+        }
+        
+        # Get responders
+        hospital = find_top_3_hospitals(lat, lon)[0]
+        police = find_nearest_police(lat, lon)
+        
+        # Trigger alarm to all responders
+        play_alarm(police['phone'], victim_name, location_info)
+        play_alarm(hospital['phone'], victim_name, location_info)
+        
+        # Update accident status
+        acc_doc_ref.update({
+            "alarm_triggered": True,
+            "alarm_timestamp": firestore.SERVER_TIMESTAMP
+        })
+        
+        print(f"🚨 ALARM TRIGGERED for accident {accident_id}")
+        
+        return {
+            "status": "success",
+            "message": "Emergency alarm triggered to all responders",
+            "accident_id": accident_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ERROR in trigger_alarm: {e}")
+        raise HTTPException(status_code=500, detail="Failed to trigger alarm")
+
+
+# ============================================================================
+# Ambulance Pickup Confirmation Endpoints
+# ============================================================================
+
+@app.post("/confirm_pickup/{accident_id}")
+def confirm_pickup(
+    accident_id: str,
+    hospital_name: str = Query(..., description="Hospital name"),
+    hospital_phone: str = Query(..., description="Hospital phone number")
+):
+    """
+    Confirm that ambulance has picked up the victim.
+    Sends confirmation SMS to family and updates accident status.
+    """
+    try:
+        # Get accident data
+        acc_doc_ref = db.collection("accidents").document(accident_id)
+        acc_doc = acc_doc_ref.get()
+        
+        if not acc_doc.exists:
+            raise HTTPException(status_code=404, detail="Accident record not found")
+        
+        acc_data = acc_doc.to_dict()
+        victim_name = acc_data.get('name', 'A user')
+        user_id = acc_data.get('userId')
+        lat = acc_data['latitude']
+        lon = acc_data['longitude']
+        
+        # Get address
+        address = reverse_geocode(lat, lon)
+        location_url = f"https://www.google.com/maps?q={lat},{lon}"
+        
+        # Update accident status
+        acc_doc_ref.update({
+            "status": "picked_up",
+            "pickup_timestamp": firestore.SERVER_TIMESTAMP,
+            "hospital_name": hospital_name,
+            "hospital_phone": hospital_phone
+        })
+        
+        # Get user and notify family
+        if user_id:
+            try:
+                user_doc = db.collection("users").document(user_id).get()
+                if user_doc.exists:
+                    user_data = user_doc.to_dict()
+                    contacts_raw = user_data.get("emergencyContacts", [])
+                    
+                    # Parse contacts
+                    contacts = []
+                    if isinstance(contacts_raw, list):
+                        for item in contacts_raw:
+                            if isinstance(item, dict):
+                                contacts.append(item)
+                            elif isinstance(item, str):
+                                if item.startswith('+'):
+                                    contacts.append({"phone": item, "name": "Emergency Contact"})
+                    elif isinstance(contacts_raw, dict):
+                        contacts.append(contacts_raw)
+                    
+                    # Send pickup confirmation to all family contacts
+                    for contact_map in contacts:
+                        phone_number = (contact_map.get("phone") or 
+                                      contact_map.get("phoneNumber") or 
+                                      contact_map.get("mobile") or
+                                      contact_map.get("telephone"))
+                        
+                        if phone_number:
+                            send_pickup_confirmation(
+                                phone_number, 
+                                victim_name, 
+                                hospital_name, 
+                                address, 
+                                location_url
+                            )
+                            
+            except Exception as e:
+                print(f"ERROR sending pickup confirmation to family: {e}")
+        
+        print(f"✅ PICKUP CONFIRMED for accident {accident_id} by {hospital_name}")
+        
+        return {
+            "status": "success",
+            "message": "Ambulance pickup confirmed. Family notified.",
+            "accident_id": accident_id,
+            "hospital": hospital_name
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ERROR in confirm_pickup: {e}")
+        raise HTTPException(status_code=500, detail="Failed to confirm pickup")
 

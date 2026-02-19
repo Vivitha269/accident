@@ -7,19 +7,29 @@
         body { font-family: sans-serif; padding: 20px; background: #f0f0f0; }
         #map { height: 500px; width: 100%; border-radius: 10px; border: 2px solid red; }
         .btn-accept { width: 100%; padding: 20px; background: #28a745; color: white; border: none; font-size: 1.5rem; cursor: pointer; margin-top: 10px; }
+        .btn-pickup { width: 100%; padding: 20px; background: #17a2b8; color: white; border: none; font-size: 1.5rem; cursor: pointer; margin-top: 10px; }
+        .btn-alarm { width: 100%; padding: 15px; background: #dc3545; color: white; border: none; font-size: 1.2rem; cursor: pointer; margin-top: 10px; }
         .info-panel { background: white; padding: 15px; margin-top: 10px; border-radius: 10px; }
         .route-info { margin: 5px 0; padding: 10px; background: #f8f9fa; border-radius: 5px; }
         .police-route { border-left: 4px solid #2196F3; }
         .hospital-route { border-left: 4px solid #f44336; }
+        .status-badge { display: inline-block; padding: 5px 15px; border-radius: 20px; font-weight: bold; margin-bottom: 10px; }
+        .status-reported { background: #ffc107; color: #000; }
+        .status-active { background: #fd7e14; color: #fff; }
+        .status-dispatched { background: #17a2b8; color: #fff; }
+        .status-picked_up { background: #28a745; color: #fff; }
     </style>
 </head>
 <body>
     <h1>ACCIDENT ALERT: {{ name }}</h1>
+    <div id="status-badge" class="status-badge status-{{ status }}">{{ status|upper }}</div>
     <div id="map"></div>
     <div class="info-panel">
         <h3>Route Information</h3>
         <div id="route-info">Loading routes...</div>
     <button class="btn-accept" onclick="acceptEmergency()">ACCEPT & DISPATCH AMBULANCE</button>
+    <button class="btn-pickup" onclick="confirmPickup()">✅ CONFIRM AMBULANCE PICKUP</button>
+    <button class="btn-alarm" onclick="triggerAlarm()">🚨 TRIGGER EMERGENCY ALARM</button>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
@@ -190,6 +200,41 @@
             var res = await fetch(url, { method: 'POST' });
             var data = await res.json();
             alert(data.status || data.error);
+        }
+        
+        async function confirmPickup() {
+            var hName = prompt("Enter Hospital Name (for pickup confirmation):");
+            if (!hName) return;
+            var hPhone = prompt("Enter Hospital Phone Number:");
+            if (!hPhone) return;
+            
+            var url = '/confirm_pickup/' + accidentId + '?hospital_name=' + encodeURIComponent(hName) + '&hospital_phone=' + encodeURIComponent(hPhone);
+            var res = await fetch(url, { method: 'POST' });
+            var data = await res.json();
+            
+            if (data.status === 'success') {
+                alert('✅ Pickup confirmed! Family has been notified.');
+                // Update status badge
+                document.getElementById('status-badge').textContent = 'PICKED UP';
+                document.getElementById('status-badge').className = 'status-badge status-picked_up';
+            } else {
+                alert('Error: ' + (data.detail || 'Unknown error'));
+            }
+        }
+        
+        async function triggerAlarm() {
+            var confirmAlarm = confirm("⚠️ This will trigger an emergency alarm to all responders! Continue?");
+            if (!confirmAlarm) return;
+            
+            var url = '/trigger_alarm/' + accidentId;
+            var res = await fetch(url, { method: 'POST' });
+            var data = await res.json();
+            
+            if (data.status === 'success') {
+                alert('🚨 Emergency alarm triggered! All responders have been alerted.');
+            } else {
+                alert('Error: ' + (data.detail || 'Unknown error'));
+            }
         }
         
         // Initialize

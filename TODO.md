@@ -1,30 +1,45 @@
-# AI Accident Detection - Fixes TODO
+# AI Accident Detection - Implementation Plan
 
-## Issues Fixed:
-1. ✅ Twilio auto-call not reading the message properly - FIXED
-2. ✅ Location is wrong (not exact accident location) - FIXED (using Overpass API)
-3. ✅ Show live route to police and hospital - FIXED
+## Requirements Implemented:
+1. ✅ Speed Alert: Detect when vehicles go speeding through accident zone → trigger alarm
+2. ✅ SMS Enhancement: Send automatic SMS with location + routing/directions + emergency contact number to family
+3. ✅ Ambulance Confirmation: Confirm when ambulance arrives and picks up victim
+4. ✅ Police SMS: Send accurate SMS with location to nearby police station  
+5. ✅ Alarm System: Use alarm so everyone knows about emergency
 
-## Implementation Summary:
+## Files Updated:
 
-### Task 1: Fix Twilio Auto-call Message ✅
-- Updated `twilio_config.py` to include location details in the TwiML voice message
-- Made the voice message more comprehensive with exact location and Google Maps link
-- Updated `main.py` to pass location_info to make_call function
+### 1. services/routing.py
+- Added `get_directions_text()` function to get turn-by-turn directions for SMS messages
 
-### Task 2: Fix Location Accuracy (Overpass API) ✅
-- Updated `services/places.py` to use Overpass API to find real nearby police stations and hospitals
-- Now gets actual coordinates of real responders instead of hardcoded ones
-- Falls back to hardcoded numbers if API fails
+### 2. twilio_config.py
+- Added `send_sms_with_route()` - Enhanced SMS with routing and emergency contact info
+- Added `send_sms_to_family()` - SMS to family with location, routing, and hospital info
+- Added `send_sms_to_police()` - Enhanced police SMS with accurate location and directions
+- Added `send_sms_to_hospital()` - Enhanced hospital SMS with routing info
+- Added `send_pickup_confirmation()` - SMS confirming ambulance pickup
+- Added `play_alarm()` - Emergency alarm call to alert everyone
+- Added `speed_alert_alarm()` - Speed warning for accident zones
 
-### Task 3: Show Live Routes on Map ✅
-- Updated `static/map.html` to display routes from accident to hospital
-- Shows route polyline on map with distance and duration info
-- Shows markers for both accident location and hospital
-- Displays route information panel with details
+### 3. main.py
+- Updated imports to include new functions
+- Added `/speed_alert` endpoint - Speed detection in accident zone
+- Added `/trigger_alarm/{accident_id}` endpoint - Trigger emergency alarm
+- Added `/confirm_pickup/{accident_id}` endpoint - Confirm ambulance pickup
 
-## Notes:
-- Twilio will read the voice message with both free and paid accounts
-- The message now includes: "Emergency alert! {name} has been in an accident. This is an urgent emergency call. Please respond immediately. The accident location is {address}. Google maps link: {url}. Please send help to this location right away."
-- Overpass API is free but may have rate limits
-- The map now shows live route to the nearest hospital
+### 4. static/map.html
+- Added "Confirm Ambulance Pickup" button
+- Added "Trigger Emergency Alarm" button
+- Added status badge display
+- Added JavaScript functions for confirmPickup() and triggerAlarm()
+
+## API Endpoints:
+
+### New Endpoints:
+- `POST /speed_alert` - Alert speeding users in accident zone
+- `POST /trigger_alarm/{accident_id}` - Trigger emergency alarm to all responders
+- `POST /confirm_pickup/{accident_id}` - Confirm ambulance pickup & notify family
+
+## Status: ✅ COMPLETED
+
+
