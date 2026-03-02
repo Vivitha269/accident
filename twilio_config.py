@@ -7,37 +7,66 @@ load_dotenv()
 
 client = Client(os.getenv('TWILIO_ACCOUNT_SID'), os.getenv('TWILIO_AUTH_TOKEN'))
 
-def is_valid_phone_number(phone):
+def normalize_phone_number(phone):
     """
-    Validate phone number format.
-    Accepts E.164 format: +[country code][number]
-    Must be at least 10 digits, starting with +
+    Normalize phone number to E.164 format for Twilio.
+    Converts Indian numbers (10-digit or +91) to proper E.164 format.
+    
+    Returns formatted number or None if invalid.
     """
     if not phone:
-        return False
+        return None
     
     # Convert to string if not already
     phone_str = str(phone).strip()
     
-    # Check if it starts with + (E.164 format)
-    if not phone_str.startswith('+'):
-        print(f"Skipping invalid phone (not E.164 format): {phone_str}")
+    # Remove spaces, hyphens, parentheses
+    phone_str = phone_str.replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
+    
+    # If it already starts with +, validate it
+    if phone_str.startswith('+'):
+        digits = phone_str[1:]
+        if digits.isdigit() and 10 <= len(digits) <= 15:
+            return phone_str
+        else:
+            print(f"Invalid phone format: {phone}")
+            return None
+    
+    # If it's exactly 10 digits, assume Indian number
+    if phone_str.isdigit() and len(phone_str) == 10:
+        return f"+91{phone_str}"
+    
+    # If it's 12 digits starting with 91 (India country code)
+    if phone_str.isdigit() and len(phone_str) == 12 and phone_str.startswith('91'):
+        return f"+{phone_str}"
+    
+    # If it's 11-13 digits, assume country code is included
+    if phone_str.isdigit() and 11 <= len(phone_str) <= 13:
+        return f"+{phone_str}"
+    
+    print(f"Cannot normalize phone number: {phone}")
+    return None
+
+
+def is_valid_phone_number(phone):
+    """
+    Validate phone number format.
+    Accepts E.164 format: +[country code][number]
+    Also accepts 10-digit Indian numbers (will be normalized to +91).
+    """
+    if not phone:
         return False
     
-    # Remove + and check if remaining is digits (10-15 digits)
-    digits = phone_str[1:]
-    if not digits.isdigit() or len(digits) < 10 or len(digits) > 15:
-        print(f"Skipping invalid phone (wrong digit count): {phone_str}")
-        return False
-    
-    return True
+    normalized = normalize_phone_number(phone)
+    return normalized is not None
 
 def send_sms(to_number, body):
     """
-    Send SMS with proper validation to prevent Short Code errors.
+    Send SMS with proper validation and normalization to prevent errors.
     """
-    # Validate phone number before attempting to send
-    if not is_valid_phone_number(to_number):
+    # Normalize phone number before attempting to send
+    normalized_number = normalize_phone_number(to_number)
+    if not normalized_number:
         print(f"Skipping SMS to invalid number: {to_number}")
         return
     
@@ -45,9 +74,9 @@ def send_sms(to_number, body):
         client.messages.create(
             body=body, 
             from_=os.getenv('TWILIO_PHONE_NUMBER'), 
-            to=to_number
+            to=normalized_number
         )
-        print(f"SMS sent successfully to {to_number}")
+        print(f"SMS sent successfully to {normalized_number}")
     except Exception as e:
         print(f"Twilio SMS Error: {e}")
 
@@ -64,7 +93,9 @@ def send_sms_with_route(to_number, victim_name, address, maps_url, directions_te
         directions_text: Turn-by-turn directions
         emergency_contact_info: Dict with 'name' and 'phone' of emergency contact
     """
-    if not is_valid_phone_number(to_number):
+    # Normalize phone number before attempting to send
+    normalized_number = normalize_phone_number(to_number)
+    if not normalized_number:
         print(f"Skipping SMS to invalid number: {to_number}")
         return
     
@@ -88,9 +119,9 @@ def send_sms_with_route(to_number, victim_name, address, maps_url, directions_te
         client.messages.create(
             body=sms_text,
             from_=os.getenv('TWILIO_PHONE_NUMBER'),
-            to=to_number
+            to=normalized_number
         )
-        print(f"Enhanced SMS with route sent successfully to {to_number}")
+        print(f"Enhanced SMS with route sent successfully to {normalized_number}")
     except Exception as e:
         print(f"Twilio SMS Error: {e}")
 
@@ -108,7 +139,9 @@ def send_sms_to_family(to_number, victim_name, address, maps_url, directions_tex
         hospital_name: Name of hospital
         hospital_phone: Hospital phone number
     """
-    if not is_valid_phone_number(to_number):
+    # Normalize phone number before attempting to send
+    normalized_number = normalize_phone_number(to_number)
+    if not normalized_number:
         print(f"Skipping SMS to invalid number: {to_number}")
         return
     
@@ -127,9 +160,9 @@ def send_sms_to_family(to_number, victim_name, address, maps_url, directions_tex
         client.messages.create(
             body=sms_text,
             from_=os.getenv('TWILIO_PHONE_NUMBER'),
-            to=to_number
+            to=normalized_number
         )
-        print(f"Family SMS sent successfully to {to_number}")
+        print(f"Family SMS sent successfully to {normalized_number}")
     except Exception as e:
         print(f"Twilio SMS Error: {e}")
 
@@ -138,7 +171,9 @@ def send_sms_to_police(to_number, victim_name, address, maps_url, directions_tex
     """
     Send enhanced SMS to police with accurate location and directions.
     """
-    if not is_valid_phone_number(to_number):
+    # Normalize phone number before attempting to send
+    normalized_number = normalize_phone_number(to_number)
+    if not normalized_number:
         print(f"Skipping SMS to invalid number: {to_number}")
         return
     
@@ -157,9 +192,9 @@ def send_sms_to_police(to_number, victim_name, address, maps_url, directions_tex
         client.messages.create(
             body=sms_text,
             from_=os.getenv('TWILIO_PHONE_NUMBER'),
-            to=to_number
+            to=normalized_number
         )
-        print(f"Police SMS sent successfully to {to_number}")
+        print(f"Police SMS sent successfully to {normalized_number}")
     except Exception as e:
         print(f"Twilio SMS Error: {e}")
 
@@ -168,7 +203,9 @@ def send_sms_to_hospital(to_number, victim_name, address, maps_url, directions_t
     """
     Send enhanced SMS to hospital with accurate location and directions.
     """
-    if not is_valid_phone_number(to_number):
+    # Normalize phone number before attempting to send
+    normalized_number = normalize_phone_number(to_number)
+    if not normalized_number:
         print(f"Skipping SMS to invalid number: {to_number}")
         return
     
@@ -189,9 +226,9 @@ def send_sms_to_hospital(to_number, victim_name, address, maps_url, directions_t
         client.messages.create(
             body=sms_text,
             from_=os.getenv('TWILIO_PHONE_NUMBER'),
-            to=to_number
+            to=normalized_number
         )
-        print(f"Hospital SMS sent successfully to {to_number}")
+        print(f"Hospital SMS sent successfully to {normalized_number}")
     except Exception as e:
         print(f"Twilio SMS Error: {e}")
 
@@ -200,7 +237,9 @@ def send_pickup_confirmation(to_number, victim_name, hospital_name, accident_loc
     """
     Send SMS confirming ambulance has picked up the victim.
     """
-    if not is_valid_phone_number(to_number):
+    # Normalize phone number before attempting to send
+    normalized_number = normalize_phone_number(to_number)
+    if not normalized_number:
         print(f"Skipping SMS to invalid number: {to_number}")
         return
     
@@ -215,9 +254,9 @@ def send_pickup_confirmation(to_number, victim_name, hospital_name, accident_loc
         client.messages.create(
             body=sms_text,
             from_=os.getenv('TWILIO_PHONE_NUMBER'),
-            to=to_number
+            to=normalized_number
         )
-        print(f"Pickup confirmation SMS sent to {to_number}")
+        print(f"Pickup confirmation SMS sent to {normalized_number}")
     except Exception as e:
         print(f"Twilio SMS Error: {e}")
 
@@ -232,8 +271,9 @@ def play_alarm(to_number, victim_name="User", location_info=None):
         victim_name: Name of the victim
         location_info: Dictionary with 'address' and 'maps_url' keys
     """
-    # Validate phone number before attempting to call
-    if not is_valid_phone_number(to_number):
+    # Normalize phone number before attempting to call
+    normalized_number = normalize_phone_number(to_number)
+    if not normalized_number:
         print(f"Skipping alarm call to invalid number: {to_number}")
         return
     
@@ -275,9 +315,9 @@ def play_alarm(to_number, victim_name="User", location_info=None):
         client.calls.create(
             twiml=twiml_content,
             from_=os.getenv('TWILIO_PHONE_NUMBER'),
-            to=to_number
+            to=normalized_number
         )
-        print(f"Alarm call initiated successfully to {to_number}")
+        print(f"Alarm call initiated successfully to {normalized_number}")
     except Exception as e:
         print(f"Twilio Alarm Call Error: {e}")
 
@@ -287,7 +327,9 @@ def make_call(to_number, victim_name="User", location_info=None):
     Make a concise emergency voice call providing victim name and location.
     This is a general-purpose call used for notifying family, police, or hospitals.
     """
-    if not is_valid_phone_number(to_number):
+    # Normalize phone number before attempting to call
+    normalized_number = normalize_phone_number(to_number)
+    if not normalized_number:
         print(f"Skipping call to invalid number: {to_number}")
         return
 
@@ -311,9 +353,9 @@ def make_call(to_number, victim_name="User", location_info=None):
         client.calls.create(
             twiml=twiml,
             from_=os.getenv('TWILIO_PHONE_NUMBER'),
-            to=to_number
+            to=normalized_number
         )
-        print(f"Call initiated successfully to {to_number}")
+        print(f"Call initiated successfully to {normalized_number}")
     except Exception as e:
         print(f"Twilio Call Error: {e}")
 
@@ -326,7 +368,9 @@ def speed_alert_alarm(to_number, location_info=None):
         to_number: Phone number to call
         location_info: Dictionary with zone info
     """
-    if not is_valid_phone_number(to_number):
+    # Normalize phone number before attempting to call
+    normalized_number = normalize_phone_number(to_number)
+    if not normalized_number:
         print(f"Skipping speed alert to invalid number: {to_number}")
         return
     
@@ -351,8 +395,8 @@ def speed_alert_alarm(to_number, location_info=None):
         client.calls.create(
             twiml=twiml_content,
             from_=os.getenv('TWILIO_PHONE_NUMBER'),
-            to=to_number
+            to=normalized_number
         )
-        print(f"Speed alert call initiated to {to_number}")
+        print(f"Speed alert call initiated to {normalized_number}")
     except Exception as e:
         print(f"Twilio Speed Alert Error: {e}")
