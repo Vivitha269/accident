@@ -268,9 +268,9 @@ def play_alarm(to_number, victim_name="User", location_info=None):
     </Response>
     """
     
-    # Fix the variable name in the TwiML
-    twiml_content = twiml_content.replace("{locationText}", "{location_text}")
-    
+    # Insert actual location text into the TwiML and initiate the call
+    twiml_content = twiml_content.replace("{locationText}", location_text)
+
     try:
         client.calls.create(
             twiml=twiml_content,
@@ -280,6 +280,42 @@ def play_alarm(to_number, victim_name="User", location_info=None):
         print(f"Alarm call initiated successfully to {to_number}")
     except Exception as e:
         print(f"Twilio Alarm Call Error: {e}")
+
+
+def make_call(to_number, victim_name="User", location_info=None):
+    """
+    Make a concise emergency voice call providing victim name and location.
+    This is a general-purpose call used for notifying family, police, or hospitals.
+    """
+    if not is_valid_phone_number(to_number):
+        print(f"Skipping call to invalid number: {to_number}")
+        return
+
+    address = "Unknown location"
+    maps = ""
+    if location_info:
+        address = location_info.get('address', address)
+        maps = location_info.get('maps_url', '')
+
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+    <Response>
+        <Say voice="alice" language="en-US" rate="80">
+            Emergency notification. {victim_name} has been in an accident at {address}.
+            {(' Google Maps link: ' + maps) if maps else ''}
+            Please respond immediately and contact emergency services.
+        </Say>
+    </Response>
+    """
+
+    try:
+        client.calls.create(
+            twiml=twiml,
+            from_=os.getenv('TWILIO_PHONE_NUMBER'),
+            to=to_number
+        )
+        print(f"Call initiated successfully to {to_number}")
+    except Exception as e:
+        print(f"Twilio Call Error: {e}")
 
 
 def speed_alert_alarm(to_number, location_info=None):

@@ -158,6 +158,17 @@ def trigger_all_alerts(accident_id: str):
         hospital = find_top_3_hospitals(acc_data['latitude'], acc_data['longitude'])[0]
         police = find_nearest_police(acc_data['latitude'], acc_data['longitude'])
 
+        # 2.a Compute directions text for messages (limit to a few steps)
+        try:
+            directions_to_hospital = get_directions_text(lat, lon, hospital.get('lat'), hospital.get('lon'))
+        except Exception:
+            directions_to_hospital = None
+
+        try:
+            directions_to_police = get_directions_text(lat, lon, police.get('lat'), police.get('lon'))
+        except Exception:
+            directions_to_police = None
+
         # 3. Notify Family (from Firestore)
         try:
             user_doc = db.collection("users").document(acc_data['userId']).get()
@@ -201,8 +212,25 @@ def trigger_all_alerts(accident_id: str):
                     
                     if phone_number:
                         print(f"   - Alerting family contact at {phone_number}")
-                        send_sms(phone_number, sms_text)
-                        make_call(phone_number, victim_name, location_info)
+                        # Send enhanced SMS with routing to hospital and hospital info
+                        try:
+                            send_sms_to_family(
+                                phone_number,
+                                victim_name,
+                                address,
+                                location_url,
+                                directions_to_hospital,
+                                hospital.get('name'),
+                                hospital.get('phone')
+                            )
+                        except Exception as e:
+                            print(f"Warning: send_sms_to_family failed for {phone_number}: {e}")
+
+                        # Also place a short voice call summarizing the situation
+                        try:
+                            make_call(phone_number, victim_name, location_info)
+                        except Exception as e:
+                            print(f"Warning: make_call failed for family {phone_number}: {e}")
                     else:
                         print(f"   - WARNING: Contact map without valid phone key: {contact_map}")
             else:
@@ -214,21 +242,50 @@ def trigger_all_alerts(accident_id: str):
 
         # 4. Notify Police (from Overpass API)
         try:
-            print(f"   - Alerting police at {police['phone']}")
+            police_phone = police.get('phone')
+            print(f"   - Alerting police at {police_phone}")
             police_address = police.get('address', 'Unknown police station')
-            police_sms = f"POLICE ALERT: {victim_name} has been in an accident.\n📍 Location: {address}\n🗺️ Maps: {location_url}\n📍 Police Station: {police_address}"
-            send_sms(police['phone'], police_sms)
-            make_call(police['phone'], victim_name, location_info)
+            try:
+                send_sms_to_police(
+                    police_phone,
+                    victim_name,
+                    address,
+                    location_url,
+                    directions_to_police,
+                    lat,
+                    lon
+                )
+            except Exception as e:
+                print(f"Warning: send_sms_to_police failed: {e}")
+
+            try:
+                make_call(police_phone, victim_name, location_info)
+            except Exception as e:
+                print(f"Warning: make_call to police failed: {e}")
         except Exception as e:
             print(f"ERROR during police alert notification: {e}")
 
         # 5. Notify Hospital (from Overpass API)
         try:
-            print(f"   - Alerting hospital at {hospital['phone']}")
+            hospital_phone = hospital.get('phone')
+            print(f"   - Alerting hospital at {hospital_phone}")
             hospital_address = hospital.get('address', 'Unknown hospital')
-            hospital_sms = f"HOSPITAL ALERT: {victim_name} has been in an accident.\n📍 Location: {address}\n🗺️ Maps: {location_url}\n🏥 Hospital: {hospital_address}"
-            send_sms(hospital['phone'], hospital_sms)
-            make_call(hospital['phone'], victim_name, location_info)
+            try:
+                send_sms_to_hospital(
+                    hospital_phone,
+                    victim_name,
+                    address,
+                    location_url,
+                    directions_to_hospital,
+                    police
+                )
+            except Exception as e:
+                print(f"Warning: send_sms_to_hospital failed: {e}")
+
+            try:
+                make_call(hospital_phone, victim_name, location_info)
+            except Exception as e:
+                print(f"Warning: make_call to hospital failed: {e}")
         except Exception as e:
             print(f"ERROR during hospital alert notification: {e}")
 
