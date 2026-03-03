@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Request, Query
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
@@ -17,7 +18,8 @@ from config import db
 from twilio_config import (
     send_sms, make_call, play_alarm, speed_alert_alarm,
     send_sms_to_family, send_sms_to_police, send_sms_to_hospital,
-    send_pickup_confirmation, send_hospital_confirmation, send_hospital_acknowledgment
+    send_pickup_confirmation, send_hospital_confirmation, send_hospital_acknowledgment,
+    normalize_phone_number, is_valid_phone_number
 )
 from services.places import find_nearest_police, find_top_3_hospitals
 from services.geocoding import reverse_geocode
@@ -758,4 +760,95 @@ def hospital_status(accident_id: str):
     except Exception as e:
         print(f"ERROR in hospital_status: {e}")
         raise HTTPException(status_code=500, detail="Failed to get hospital status")
+
+
+# ============================================================================
+# SMS Diagnostic Endpoint - DEBUG ONLY
+# ============================================================================
+
+@app.get("/diagnose_sms")
+def diagnose_sms():
+    """
+    Diagnostic endpoint to check SMS configuration and test Twilio.
+    Use this to verify SMS is working properly.
+    """
+    diagnostics = {
+        "status": "checking",
+        "environment_variables": {},
+        "twilio_config": {},
+        "test_results": []
+    }
+    
+    # Check environment variables
+    env_vars = ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER']
+    for var in env_vars:
+        value = os.getenv(var)
+        diagnostics["environment_variables"][var] = {
+            "set": value is not None,
+            "length": len(value) if value else 0,
+            "preview": value[:4] + "..." if value and len(value) > 4 else "Not set"
+        }
+    
+    # Check if all required vars are set
+    all_vars_set = all(os.getenv(v) for v in env_vars)
+    diagnostics["twilio_config"]["all_variables_set"] = all_vars_set
+    
+    # Test phone normalization
+    test_phones = [
+        "+918838177899",
+        "8838177899",
+        "+1 415 353 1664",
+        "9597157440"
+    ]
+    
+    for phone in test_phones:
+        normalized = normalize_phone_number(phone)
+        is_valid = is_valid_phone_number(phone)
+        diagnostics["test_results"].append({
+            "original": phone,
+            "normalized": normalized,
+            "valid": is_valid
+        })
+    
+    if all_vars_set:
+        diagnostics["status"] = "ready"
+        diagnostics["message"] = "All Twilio variables are configured. SMS should work."
+    else:
+        diagnostics["status"] = "error"
+        diagnostics["message"] = "Missing Twilio environment variables! Check Render settings."
+    
+    return diagnostics
+
+
+@app.get("/test_sms/{phone_number}")
+def test_sms(phone_number: str):
+    """
+    Test endpoint to send a sample SMS to verify Twilio is working.
+    Use this to test if SMS is actually being sent.
+    """
+    # Validate phone number
+    normalized = normalize_phone_number(phone_number)
+    if not normalized:
+        raise HTTPException(status_code=400, detail=f"Invalid phone number: {phone_number}")
+    
+    test_message = "🔧 Test SMS from AI Accident Detection System. If you received this, SMS is working!"
+    
+    try:
+        result = send_sms(normalized, test_message)
+        if result:
+            return {
+                "status": "success",
+                "message": f"Test SMS sent successfully to {normalized}",
+                "twilio_sid": result
+            }
+        else:
+            return {
+                "status": "failed",
+                "message": "SMS sending failed. Check server logs for details."
+            }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"SMS Error: {str(e)}"
+        }
 
