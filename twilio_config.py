@@ -71,14 +71,24 @@ def send_sms(to_number, body):
         return
     
     try:
-        client.messages.create(
+        msg = client.messages.create(
             body=body, 
             from_=os.getenv('TWILIO_PHONE_NUMBER'), 
             to=normalized_number
         )
-        print(f"SMS sent successfully to {normalized_number}")
+        print(f"SMS sent successfully to {normalized_number} (sid={msg.sid})")
+        return msg.sid
     except Exception as e:
-        print(f"Twilio SMS Error: {e}")
+        # TwilioRestException carries a code attribute we can inspect
+        err_code = getattr(e, 'code', None)
+        err_msg  = getattr(e, 'msg', str(e))
+        print(f"Twilio SMS Error (code={err_code}): {err_msg}")
+        # common error codes:
+        # 21608 - trial account cannot send to unverified number
+        # 21610 - recipient has unsubscribed
+        # 21611 - daily message limit reached
+        # 20429 - too many requests (rate limit)
+        return None
 
 
 def send_sms_with_route(to_number, victim_name, address, maps_url, directions_text, emergency_contact_info=None):
@@ -116,14 +126,18 @@ def send_sms_with_route(to_number, victim_name, address, maps_url, directions_te
             sms_text += f"\n👤 Emergency Contact: {contact_name} ({contact_phone})"
     
     try:
-        client.messages.create(
+        msg = client.messages.create(
             body=sms_text,
             from_=os.getenv('TWILIO_PHONE_NUMBER'),
             to=normalized_number
         )
-        print(f"Enhanced SMS with route sent successfully to {normalized_number}")
+        print(f"Enhanced SMS with route sent successfully to {normalized_number} (sid={msg.sid})")
+        return msg.sid
     except Exception as e:
-        print(f"Twilio SMS Error: {e}")
+        err_code = getattr(e, 'code', None)
+        err_msg = getattr(e, 'msg', str(e))
+        print(f"Twilio SMS Error (code={err_code}): {err_msg}")
+        return None
 
 
 def send_sms_to_family(to_number, victim_name, address, maps_url, directions_text, hospital_name, hospital_phone):
@@ -157,14 +171,18 @@ def send_sms_to_family(to_number, victim_name, address, maps_url, directions_tex
     sms_text += f"\n💝 Please rush to the hospital if possible!"
     
     try:
-        client.messages.create(
+        msg = client.messages.create(
             body=sms_text,
             from_=os.getenv('TWILIO_PHONE_NUMBER'),
             to=normalized_number
         )
-        print(f"Family SMS sent successfully to {normalized_number}")
+        print(f"Family SMS sent successfully to {normalized_number} (sid={msg.sid})")
+        return msg.sid
     except Exception as e:
-        print(f"Twilio SMS Error: {e}")
+        err_code = getattr(e, 'code', None)
+        err_msg = getattr(e, 'msg', str(e))
+        print(f"Twilio SMS Error (code={err_code}): {err_msg}")
+        return None
 
 
 def send_sms_to_police(to_number, victim_name, address, maps_url, directions_text, accident_lat, accident_lon):
@@ -189,14 +207,18 @@ def send_sms_to_police(to_number, victim_name, address, maps_url, directions_tex
     sms_text += f"\n⚠️ IMMEDIATE RESPONSE REQUIRED!"
     
     try:
-        client.messages.create(
+        msg = client.messages.create(
             body=sms_text,
             from_=os.getenv('TWILIO_PHONE_NUMBER'),
             to=normalized_number
         )
-        print(f"Police SMS sent successfully to {normalized_number}")
+        print(f"Police SMS sent successfully to {normalized_number} (sid={msg.sid})")
+        return msg.sid
     except Exception as e:
-        print(f"Twilio SMS Error: {e}")
+        err_code = getattr(e, 'code', None)
+        err_msg = getattr(e, 'msg', str(e))
+        print(f"Twilio SMS Error (code={err_code}): {err_msg}")
+        return None
 
 
 def send_sms_to_hospital(to_number, victim_name, address, maps_url, directions_text, police_station_info=None):
@@ -223,14 +245,18 @@ def send_sms_to_hospital(to_number, victim_name, address, maps_url, directions_t
     sms_text += f"\n\n⚠️ PREPARED FOR EMERGENCY ADMISSION!"
     
     try:
-        client.messages.create(
+        msg = client.messages.create(
             body=sms_text,
             from_=os.getenv('TWILIO_PHONE_NUMBER'),
             to=normalized_number
         )
-        print(f"Hospital SMS sent successfully to {normalized_number}")
+        print(f"Hospital SMS sent successfully to {normalized_number} (sid={msg.sid})")
+        return msg.sid
     except Exception as e:
-        print(f"Twilio SMS Error: {e}")
+        err_code = getattr(e, 'code', None)
+        err_msg = getattr(e, 'msg', str(e))
+        print(f"Twilio SMS Error (code={err_code}): {err_msg}")
+        return None
 
 
 def send_pickup_confirmation(to_number, victim_name, hospital_name, accident_location, maps_url):
@@ -251,14 +277,18 @@ def send_pickup_confirmation(to_number, victim_name, hospital_name, accident_loc
     sms_text += f"💝 The victim is now being transported to the hospital."
     
     try:
-        client.messages.create(
+        msg = client.messages.create(
             body=sms_text,
             from_=os.getenv('TWILIO_PHONE_NUMBER'),
             to=normalized_number
         )
-        print(f"Pickup confirmation SMS sent to {normalized_number}")
+        print(f"Pickup confirmation SMS sent to {normalized_number} (sid={msg.sid})")
+        return msg.sid
     except Exception as e:
-        print(f"Twilio SMS Error: {e}")
+        err_code = getattr(e, 'code', None)
+        err_msg = getattr(e, 'msg', str(e))
+        print(f"Twilio SMS Error (code={err_code}): {err_msg}")
+        return None
 
 
 def play_alarm(to_number, victim_name="User", location_info=None):
@@ -400,3 +430,89 @@ def speed_alert_alarm(to_number, location_info=None):
         print(f"Speed alert call initiated to {normalized_number}")
     except Exception as e:
         print(f"Twilio Speed Alert Error: {e}")
+
+
+def send_hospital_confirmation(to_number, victim_name, hospital_name, hospital_phone, accident_location, maps_url):
+    """
+    Send SMS confirming hospital has been dispatched/confirmed for the accident.
+    This is sent to the family to inform them which hospital is responding.
+    
+    Args:
+        to_number: Family member's phone number
+        victim_name: Name of the victim: Name of confirmed
+        hospital_name hospital
+        hospital_phone: Hospital phone number
+        accident_location: Human-readable accident location
+        maps_url: Google Maps link to accident
+    """
+    # Normalize phone number before attempting to send
+    normalized_number = normalize_phone_number(to_number)
+    if not normalized_number:
+        print(f"Skipping SMS to invalid number: {to_number}")
+        return
+    
+    sms_text = f"✅ HOSPITAL CONFIRMED - {victim_name}'s Accident\n\n"
+    sms_text += f"🏥 Hospital: {hospital_name}\n"
+    sms_text += f"📞 Hospital Phone: {hospital_phone}\n"
+    sms_text += f"📍 Accident Location: {accident_location}\n"
+    sms_text += f"🗺️ Maps: {maps_url}\n\n"
+    sms_text += f"💝 The hospital has been notified and ambulance is being dispatched. "
+    sms_text += f"Please stay at the location or contact the hospital for updates."
+    
+    try:
+        msg = client.messages.create(
+            body=sms_text,
+            from_=os.getenv('TWILIO_PHONE_NUMBER'),
+            to=normalized_number
+        )
+        print(f"Hospital confirmation SMS sent to {normalized_number} (sid={msg.sid})")
+        return msg.sid
+    except Exception as e:
+        err_code = getattr(e, 'code', None)
+        err_msg = getattr(e, 'msg', str(e))
+        print(f"Twilio SMS Error (code={err_code}): {err_msg}")
+        return None
+
+
+def send_hospital_acknowledgment(to_number, victim_name, accident_location, maps_url, contact_name=None, contact_phone=None):
+    """
+    Send acknowledgment SMS to hospital confirming their response has been received.
+    
+    Args:
+        to_number: Hospital's phone number
+        victim_name: Name of the victim
+        accident_location: Human-readable accident location
+        maps_url: Google Maps link to accident
+        contact_name: Name of emergency contact (optional)
+        contact_phone: Phone of emergency contact (optional)
+    """
+    # Normalize phone number before attempting to send
+    normalized_number = normalize_phone_number(to_number)
+    if not normalized_number:
+        print(f"Skipping SMS to invalid number: {to_number}")
+        return
+    
+    sms_text = f"✅ HOSPITAL RESPONSE CONFIRMED\n\n"
+    sms_text += f"👤 Patient: {victim_name}\n"
+    sms_text += f"📍 Accident Location: {accident_location}\n"
+    sms_text += f"🗺️ Maps: {maps_url}\n"
+    
+    if contact_name and contact_phone:
+        sms_text += f"\n👤 Family Contact: {contact_name} ({contact_phone})"
+    
+    sms_text += f"\n\n✅ Your hospital has been selected for this emergency. "
+    sms_text += f"The victim's family has been notified of your dispatch."
+    
+    try:
+        msg = client.messages.create(
+            body=sms_text,
+            from_=os.getenv('TWILIO_PHONE_NUMBER'),
+            to=normalized_number
+        )
+        print(f"Hospital acknowledgment SMS sent to {normalized_number} (sid={msg.sid})")
+        return msg.sid
+    except Exception as e:
+        err_code = getattr(e, 'code', None)
+        err_msg = getattr(e, 'msg', str(e))
+        print(f"Twilio SMS Error (code={err_code}): {err_msg}")
+        return None

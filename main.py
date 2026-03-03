@@ -17,7 +17,7 @@ from config import db
 from twilio_config import (
     send_sms, make_call, play_alarm, speed_alert_alarm,
     send_sms_to_family, send_sms_to_police, send_sms_to_hospital,
-    send_pickup_confirmation
+    send_pickup_confirmation, send_hospital_confirmation, send_hospital_acknowledgment
 )
 from services.places import find_nearest_police, find_top_3_hospitals
 from services.geocoding import reverse_geocode
@@ -591,4 +591,171 @@ def confirm_pickup(
     except Exception as e:
         print(f"ERROR in confirm_pickup: {e}")
         raise HTTPException(status_code=500, detail="Failed to confirm pickup")
+
+
+# ============================================================================
+# Hospital Confirmation Endpoints (NEW)
+# ============================================================================
+
+@app.post("/hospital_confirm/{accident_id}")
+def hospital_confirm(
+    accident_id: str,
+    hospital_name: str = Query(..., description="Name of selected hospital"),
+    hospital_phone: str = Query(..., description="Phone number of selected hospital")
+):
+    """
+    Confirm that a hospital has been selected/picked for the accident.
+    Saves the hospital info to Firebase and sends confirmation SMS to family.
+    
+    This is called when the user/hospital selects which hospital will respond.
+    """
+    # Input validation
+    if not hospital_name or len(hospital_name.strip()) < 2:
+        raise HTTPException(status_code=400, detail="Invalid hospital name")
+    
+    if not hospital_phone:
+        raise HTTPException(status_code=400, detail="Invalid hospital phone")
+    
+    try:
+        # Get accident data
+        acc_doc_ref = db.collection("accidents").document(accident_id)
+        acc_doc = acc_doc_ref.get()
+        
+        if not acc_doc.exists:
+            raise HTTPException(status_code=404, detail="Accident record not found")
+        
+        acc_data = acc_doc.to_dict()
+        victim_name = acc_data.get('name', 'A user')
+        user_id = acc_data.get('userId')
+        lat = acc_data['latitude']
+        lon = acc_data['longitude']
+        
+        # Get address
+        address = reverse_geocode(lat, lon)
+        location_url = f"https://www.google.com/maps?q={lat},{lon}"
+        
+        # Update accident with confirmed hospital info
+        acc_doc_ref.update({
+            "hospital_confirmed": True,
+            "hospital_confirmed_timestamp": firestore.SERVER_TIMESTAMP,
+            "hospital_name": hospital_name,
+            "hospital_phone": hospital_phone
+        })
+        
+        print(f"🏥 HOSPITAL CONFIRMED for accident {accident_id}: {hospital_name}")
+        
+        # Send confirmation SMS to family
+        if user_id:
+            try:
+                user_doc = db.collection("users").document(user_id).get()
+                if user_doc.exists:
+                    user_data = user_doc.to_dict()
+                    contacts_raw = user_data.get("emergencyContacts", [])
+                    
+                    # Parse contacts
+                    contacts = []
+                    if isinstance(contacts_raw, list):
+                        for item in contacts_raw:
+                            if isinstance(item, dict):
+                                contacts.append(item)
+                            elif isinstance(item, str):
+                                if item.startswith('+'):
+                                    contacts.append({"phone": item, "name": "Emergency Contact"})
+                    elif isinstance(contacts_raw, dict):
+                        contacts.append(contacts_raw)
+                    
+                    # Send hospital confirmation to all family contacts
+                    for contact_map in contacts:
+                        phone_number = (contact_map.get("phone") or 
+                                      contact_map.get("phoneNumber") or 
+                                      contact_map.get("mobile") or
+                                      contact_map.get("telephone"))
+                        
+                        if phone_number:
+                            try:
+                                send_hospital_confirmation(
+                                    phone_number,
+                                    victim_name,
+                                    hospital_name,
+                                    hospital_phone,
+                                    address,
+                                    location_url
+                                )
+                            except Exception as e:
+                                print(f"Warning: send_hospital_confirmation failed: {e}")
+                    
+                    print(f"✅ Hospital confirmation SMS sent to family for accident {accident_id}")
+                            
+            except Exception as e:
+                print(f"ERROR sending hospital confirmation to family: {e}")
+        
+        # Send acknowledgment SMS to hospital
+        try:
+            send_hospital_acknowledgment(
+                hospital_phone,
+                victim_name,
+                address,
+                location_url
+            )
+            print(f"✅ Hospital acknowledgment SMS sent to {hospital_name}")
+        except Exception as e:
+            print(f"Warning: send_hospital_acknowledgment failed: {e}")
+        
+        return {
+            "status": "success",
+            "message": f"Hospital {hospital_name} confirmed. Family notified.",
+            "accident_id": accident_id,
+            "hospital": {
+                "name": hospital_name,
+                "phone": hospital_phone
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ERROR in hospital_confirm: {e}")
+        raise HTTPException(status_code=500, detail="Failed to confirm hospital")
+
+
+@app.get("/hospital_status/{accident_id}")
+def hospital_status(accident_id: str):
+    """
+    Get the hospital confirmation status for an accident.
+    Returns whether a hospital has been confirmed and the hospital details.
+    """
+    try:
+        # Get accident data
+        acc_doc_ref = db.collection("accidents").document(accident_id)
+        acc_doc = acc_doc_ref.get()
+        
+        if not acc_doc.exists:
+            raise HTTPException(status_code=404, detail="Accident record not found")
+        
+        acc_data = acc_doc.to_dict()
+        
+        # Check if hospital is confirmed
+        hospital_confirmed = acc_data.get('hospital_confirmed', False)
+        
+        # Get hospital info if confirmed
+        hospital_info = None
+        if hospital_confirmed:
+            hospital_info = {
+                "name": acc_data.get('hospital_name'),
+                "phone": acc_data.get('hospital_phone'),
+                "confirmed_at": acc_data.get('hospital_confirmed_timestamp')
+            }
+        
+        return {
+            "accident_id": accident_id,
+            "hospital_confirmed": hospital_confirmed,
+            "hospital": hospital_info,
+            "accident_status": acc_data.get('status', 'unknown')
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ERROR in hospital_status: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get hospital status")
 
