@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from firebase_admin import firestore
 from pydantic import BaseModel, field_validator
 from typing import List, Dict, Optional
+from datetime import datetime
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -40,22 +41,53 @@ class AccidentReport(BaseModel):
     """Pydantic model for accident reporting with validation."""
     userId: str
     name: str
-    lat: float
-    lon: float
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
     @field_validator('lat')
     @classmethod
     def validate_lat(cls, v):
-        if not -90 <= v <= 90:
+        if v is not None and not -90 <= v <= 90:
             raise ValueError('Latitude must be between -90 and 90')
         return v
 
     @field_validator('lon')
     @classmethod
     def validate_lon(cls, v):
-        if not -180 <= v <= 180:
+        if v is not None and not -180 <= v <= 180:
             raise ValueError('Longitude must be between -180 and 180')
         return v
+
+    @field_validator('latitude')
+    @classmethod
+    def validate_latitude(cls, v):
+        if v is not None and not -90 <= v <= 90:
+            raise ValueError('Latitude must be between -90 and 90')
+        return v
+
+    @field_validator('longitude')
+    @classmethod
+    def validate_longitude(cls, v):
+        if v is not None and not -180 <= v <= 180:
+            raise ValueError('Longitude must be between -180 and 180')
+        return v
+
+    def get_latitude(self) -> float:
+        """Get latitude from any field (lat or latitude)."""
+        return self.lat if self.lat is not None else self.latitude
+
+    def get_longitude(self) -> float:
+        """Get longitude from any field (lon or longitude)."""
+        return self.lon if self.lon is not None else self.longitude
+
+    def model_post_init(self, __context):
+        """Validate that at least one coordinate is provided."""
+        lat = self.get_latitude()
+        lon = self.get_longitude()
+        if lat is None or lon is None:
+            raise ValueError('Either lat/lon or latitude/longitude must be provided')
 
 
 class LocationQuery(BaseModel):
@@ -100,11 +132,15 @@ def accident_report(report: AccidentReport):
     The Android app will then call /trigger_alerts after a delay.
     """
     try:
+        # Get coordinates using helper methods (supports both lat/lon and latitude/longitude)
+        lat = report.get_latitude()
+        lon = report.get_longitude()
+        
         acc_ref = db.collection("accidents").add({
             "userId": report.userId,
             "name": report.name,
-            "latitude": report.lat,
-            "longitude": report.lon,
+            "latitude": lat,
+            "longitude": lon,
             "status": "reported",
             "timestamp": firestore.SERVER_TIMESTAMP
         })
@@ -851,4 +887,449 @@ def test_sms(phone_number: str):
             "status": "error",
             "message": f"SMS Error: {str(e)}"
         }
+
+
+# ============================================================================
+# Offline Sync Endpoints - For Hybrid App (Offline Detection)
+# ============================================================================
+
+class OfflineAccident(BaseModel):
+    """Model for offline accident records."""
+    local_id: str  # Generated locally by app
+    userId: str
+    name: str
+    lat: float
+    lon: float
+    timestamp: str  # ISO format from local device
+    sensors_data: Optional[Dict] = None  # Accelerometer, gyroscope data
+
+
+# ============================================================================
+# User Management Endpoints
+# ============================================================================
+
+class UserRegister(BaseModel):
+    """Model for user registration."""
+    userId: str
+    name: str
+    email: str
+    phone: str
+    password: str  # In production, hash this!
+
+
+class UserLogin(BaseModel):
+    """Model for user login."""
+    email: str
+    password: str
+
+
+class UserProfile(BaseModel):
+    """Model for user profile update."""
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+
+
+@app.post("/api/users/register")
+def register_user(user: UserRegister):
+    """
+    Register a new user.
+    """
+    try:
+        # Check if user already exists
+        existing = db.collection("users").document(user.userId).get()
+        if existing.exists:
+            raise HTTPException(status_code=400, detail="User ID already exists")
+        
+        # Check by email
+        users_by_email = db.collection("users").where("email", "==", user.email).get()
+        if users_by_email:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        
+        # Create user (store password hash in production!)
+        db.collection("users").document(user.userId).set({
+            "userId": user.userId,
+            "name": user.name,
+            "email": user.email,
+            "phone": user.phone,
+            "password": user.password,  # TODO: Hash password in production!
+            "createdAt": firestore.SERVER_TIMESTAMP,
+            "emergencyContacts": []
+        })
+        
+        return {
+            "status": "success",
+            "message": "User registered successfully",
+            "userId": user.userId
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error registering user: {e}")
+        raise HTTPException(status_code=500, detail="Failed to register user")
+
+
+@app.post("/api/users/login")
+def login_user(credentials: UserLogin):
+    """
+    Login user and return user ID.
+    """
+    try:
+        # Find user by email
+        users = db.collection("users").where("email", "==", credentials.email).get()
+        
+        if not users:
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        
+        user_doc = users[0]
+        user_data = user_doc.to_dict()
+        
+        # Check password (TODO: Use proper password hashing in production!)
+        if user_data.get("password") != credentials.password:
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        
+        return {
+            "status": "success",
+            "message": "Login successful",
+            "userId": user_data.get("userId"),
+            "name": user_data.get("name")
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error logging in: {e}")
+        raise HTTPException(status_code=500, detail="Login failed")
+
+
+@app.get("/api/users/{userId}")
+def get_user_profile(userId: str):
+    """
+    Get user profile.
+    """
+    try:
+        user_doc = db.collection("users").document(userId).get()
+        
+        if not user_doc.exists:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user_data = user_doc.to_dict()
+        # Remove password from response
+        user_data.pop("password", None)
+        user_data["userId"] = userId
+        
+        return {"status": "success", "user": user_data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting user: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get user profile")
+
+
+@app.put("/api/users/{userId}")
+def update_user_profile(userId: str, profile: UserProfile):
+    """
+    Update user profile.
+    """
+    try:
+        user_doc = db.collection("users").document(userId)
+        
+        if not user_doc.get().exists:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Build update dict
+        update_data = {}
+        if profile.name:
+            update_data["name"] = profile.name
+        if profile.email:
+            update_data["email"] = profile.email
+        if profile.phone:
+            update_data["phone"] = profile.phone
+        
+        if update_data:
+            user_doc.update(update_data)
+        
+        return {"status": "success", "message": "Profile updated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating profile: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update profile")
+
+
+# ============================================================================
+# Emergency Contacts Endpoints
+# ============================================================================
+
+class EmergencyContact(BaseModel):
+    """Model for emergency contact."""
+    name: str
+    phone: str
+    relationship: Optional[str] = None
+
+
+@app.post("/api/contacts/{userId}")
+def add_emergency_contact(userId: str, contact: EmergencyContact):
+    """
+    Add an emergency contact for a user.
+    """
+    try:
+        user_doc = db.collection("users").document(userId)
+        
+        if not user_doc.get().exists:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Get existing contacts
+        user_data = user_doc.get().to_dict()
+        contacts = user_data.get("emergencyContacts", [])
+        
+        # Add new contact
+        contacts.append({
+            "name": contact.name,
+            "phone": contact.phone,
+            "relationship": contact.relationship or ""
+        })
+        
+        user_doc.update({"emergencyContacts": contacts})
+        
+        return {
+            "status": "success",
+            "message": "Emergency contact added",
+            "contactCount": len(contacts)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error adding contact: {e}")
+        raise HTTPException(status_code=500, detail="Failed to add contact")
+
+
+@app.get("/api/contacts/{userId}")
+def get_emergency_contacts(userId: str):
+    """
+    Get all emergency contacts for a user.
+    """
+    try:
+        user_doc = db.collection("users").document(userId).get()
+        
+        if not user_doc.exists:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user_data = user_doc.to_dict()
+        contacts = user_data.get("emergencyContacts", [])
+        
+        return {
+            "status": "success",
+            "userId": userId,
+            "contacts": contacts,
+            "count": len(contacts)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting contacts: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get contacts")
+
+
+@app.put("/api/contacts/{userId}/{contactIndex}")
+def update_emergency_contact(userId: str, contactIndex: int, contact: EmergencyContact):
+    """
+    Update an emergency contact at specific index.
+    """
+    try:
+        user_doc = db.collection("users").document(userId)
+        
+        if not user_doc.get().exists:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user_data = user_doc.get().to_dict()
+        contacts = user_data.get("emergencyContacts", [])
+        
+        if contactIndex < 0 or contactIndex >= len(contacts):
+            raise HTTPException(status_code=400, detail="Invalid contact index")
+        
+        # Update contact
+        contacts[contactIndex] = {
+            "name": contact.name,
+            "phone": contact.phone,
+            "relationship": contact.relationship or ""
+        }
+        
+        user_doc.update({"emergencyContacts": contacts})
+        
+        return {"status": "success", "message": "Contact updated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating contact: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update contact")
+
+
+# ============================================================================
+# Accident Reports Endpoints
+# ============================================================================
+
+class AccidentEvent(BaseModel):
+    """Model for accident event with sensor data."""
+    userId: str
+    name: str
+    lat: float
+    lon: float
+    timestamp: str
+    speed: Optional[float] = None
+    acceleration: Optional[Dict] = None  # {"x": 0, "y": 0, "z": 0}
+    disturbance: Optional[str] = None   # "high", "medium", "low"
+
+
+@app.post("/api/accidents")
+def create_accident(accident: AccidentEvent):
+    """
+    Store accident event with GPS location, timestamp, and sensor values.
+    """
+    try:
+        acc_ref = db.collection("accidents").add({
+            "userId": accident.userId,
+            "name": accident.name,
+            "latitude": accident.lat,
+            "longitude": accident.lon,
+            "timestamp": accident.timestamp,
+            "serverTimestamp": firestore.SERVER_TIMESTAMP,
+            "status": "reported",
+            "sensorData": {
+                "speed": accident.speed,
+                "acceleration": accident.acceleration,
+                "disturbance": accident.disturbance
+            }
+        })
+        
+        accident_id = acc_ref[1].id
+        
+        return {
+            "status": "success",
+            "message": "Accident recorded successfully",
+            "accidentId": accident_id
+        }
+    except Exception as e:
+        logger.error(f"Error creating accident: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create accident record")
+
+
+@app.get("/api/accidents/{userId}")
+def get_accident_history(userId: str, limit: int = 10):
+    """
+    Retrieve accident history for a user.
+    """
+    try:
+        accidents = db.collection("accidents") \
+            .where("userId", "==", userId) \
+            .order_by("timestamp", direction=firestore.Query.DESCENDING) \
+            .limit(limit) \
+            .get()
+        
+        accident_list = []
+        for acc in accidents:
+            data = acc.to_dict()
+            accident_list.append({
+                "accidentId": acc.id,
+                "name": data.get("name"),
+                "latitude": data.get("latitude"),
+                "longitude": data.get("longitude"),
+                "timestamp": data.get("timestamp"),
+                "status": data.get("status"),
+                "sensorData": data.get("sensorData")
+            })
+        
+        return {
+            "status": "success",
+            "userId": userId,
+            "accidents": accident_list,
+            "count": len(accident_list)
+        }
+    except Exception as e:
+        logger.error(f"Error getting accident history: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get accident history")
+
+
+@app.post("/sync/accidents")
+def sync_offline_accidents(accidents: List[OfflineAccident]):
+    """
+    Sync offline accident logs to Firebase when internet is available.
+    
+    The app should:
+    1. Store accidents locally when offline
+    2. When online, call this endpoint with all stored accidents
+    3. This endpoint saves them to Firebase and returns synced IDs
+    """
+    synced_results = []
+    
+    for accident in accidents:
+        try:
+            # Check if this accident already exists (by local_id to avoid duplicates)
+            existing = db.collection("accidents").where("local_id", "==", accident.local_id).get()
+            
+            if existing:
+                # Already synced, skip
+                synced_results.append({
+                    "local_id": accident.local_id,
+                    "status": "already_synced",
+                    "firebase_id": existing[0].id
+                })
+            else:
+                # Create new accident record
+                acc_ref = db.collection("accidents").add({
+                    "local_id": accident.local_id,
+                    "userId": accident.userId,
+                    "name": accident.name,
+                    "latitude": accident.lat,
+                    "longitude": accident.lon,
+                    "timestamp": accident.timestamp,
+                    "sync_timestamp": firestore.SERVER_TIMESTAMP,
+                    "status": "offline_synced",  # Mark as synced from offline
+                    "sensors_data": accident.sensors_data or {}
+                })
+                
+                synced_results.append({
+                    "local_id": accident.local_id,
+                    "status": "synced",
+                    "firebase_id": acc_ref[1].id
+                })
+                
+                logger.info(f"Synced offline accident: {accident.local_id} -> {acc_ref[1].id}")
+                
+        except Exception as e:
+            logger.error(f"Error syncing accident {accident.local_id}: {e}")
+            synced_results.append({
+                "local_id": accident.local_id,
+                "status": "error",
+                "error": str(e)
+            })
+    
+    return {
+        "status": "completed",
+        "synced_count": len([r for r in synced_results if r["status"] == "synced"]),
+        "results": synced_results
+    }
+
+
+@app.get("/sync/status/{userId}")
+def get_sync_status(userId: str):
+    """
+    Get sync status for a user - returns unsynced accidents count.
+    The app can call this to know if there are pending offline records.
+    """
+    try:
+        # Get all accidents for this user
+        accidents = db.collection("accidents").where("userId", "==", userId).get()
+        
+        total = len(accidents)
+        offline_synced = sum(1 for a in accidents if a.to_dict().get("status") == "offline_synced")
+        
+        return {
+            "userId": userId,
+            "total_accidents": total,
+            "offline_synced": offline_synced,
+            "has_pending_sync": False  # This would need local app check
+        }
+    except Exception as e:
+        logger.error(f"Error getting sync status: {e}")
+        return {"status": "error", "message": str(e)}
 
