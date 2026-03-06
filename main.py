@@ -18,28 +18,13 @@ from twilio.rest import Client
 # ==================== CONFIGURATION ====================
 PORT = int(os.environ.get("PORT", 8000))
 
-# Initialize Firebase
-db = None
+# Initialize Firebase using config.py
 try:
-    import json
-    
-    # First try: Check for environment variable with JSON credentials
-    firebase_creds_json = os.environ.get("FIREBASE_CREDENTIALS_JSON")
-    if firebase_creds_json:
-        import json
-        creds_dict = json.loads(firebase_creds_json)
-        cred = credentials.Certificate(creds_dict)
-        firebase_admin.initialize_app(cred)
-        db = firestore.client()
-        print("Firebase initialized from environment variable")
-    else:
-        # Second try: Load from local file
-        cred = credentials.Certificate("ai-accident-firebase-adminsdk-fbsvc-0b4a184229.json")
-        firebase_admin.initialize_app(cred)
-        db = firestore.client()
-        print("Firebase initialized from local file")
+    from config import db
+    print("Firebase initialized via config.py")
 except Exception as e:
     print(f"Firebase initialization error: {e}")
+    db = None
 
 # Twilio configuration
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
