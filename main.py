@@ -58,7 +58,7 @@ app.add_middleware(
 class AccidentReport(BaseModel):
     """Pydantic model for accident reporting with validation."""
     userId: str
-    name: str
+    name: str = "Accident User"  # Default name if not provided
     latitude: float
     longitude: float
 
