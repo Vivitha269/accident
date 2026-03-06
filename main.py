@@ -19,6 +19,7 @@ from twilio.rest import Client
 PORT = int(os.environ.get("PORT", 8000))
 
 # Initialize Firebase
+db = None
 try:
     cred = credentials.Certificate("ai-accident-firebase-adminsdk-fbsvc-0b4a184229.json")
     firebase_admin.initialize_app(cred)
@@ -26,7 +27,22 @@ try:
     print("Firebase initialized successfully")
 except Exception as e:
     print(f"Firebase initialization error: {e}")
-    db = None
+    # Try alternative config loading
+    try:
+        import json
+        import os
+        creds_path = os.path.join(os.path.dirname(__file__), "ai-accident-firebase-adminsdk-fbsvc-0b4a184229.json")
+        if os.path.exists(creds_path):
+            with open(creds_path, 'r') as f:
+                creds_dict = json.load(f)
+            cred = credentials.Certificate(creds_dict)
+            firebase_admin.initialize_app(cred)
+            db = firestore.client()
+            print("Firebase initialized successfully (alternative method)")
+        else:
+            print(f"Firebase credentials file not found at: {creds_path}")
+    except Exception as e2:
+        print(f"Firebase alternative initialization also failed: {e2}")
 
 # Twilio configuration
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
