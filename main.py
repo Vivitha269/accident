@@ -183,12 +183,14 @@ def accident_report(report: AccidentReport):
         raise HTTPException(status_code=500, detail="Failed to create accident record in database.")
 
 
-@app.post("/trigger_alerts")
-def trigger_alerts(request: TriggerAlertsRequest):
+@app.post("/trigger_alerts/{accident_id}")
+def trigger_alerts(accident_id: str):
     """
-    Trigger alerts for nearby users after accident is reported.
+    Trigger alerts for a specific accident.
     
-    FIXED: This endpoint now actually sends SMS to:
+    FIXED: Accept accident_id as path parameter to match Android app.
+    
+    This endpoint now actually sends SMS to:
     1. Victim's emergency contacts (family)
     2. Nearby users (within 5km)
     3. Nearest police station
@@ -196,7 +198,7 @@ def trigger_alerts(request: TriggerAlertsRequest):
     """
     try:
         # Get accident details
-        accident_doc = db.collection("accidents").document(request.accidentId).get()
+        accident_doc = db.collection("accidents").document(accident_id).get()
         
         if not accident_doc.exists:
             raise HTTPException(status_code=404, detail="Accident not found")
@@ -214,7 +216,7 @@ def trigger_alerts(request: TriggerAlertsRequest):
         address = get_address_from_coords(accident_lat, accident_lon)
         location_url = f"https://www.google.com/maps?q={accident_lat},{accident_lon}"
         
-        logger.info(f"Triggering alerts for accident {request.accident_id} at {address}")
+        logger.info(f"Triggering alerts for accident {accident_id} at {address}")
         
         # Get all user locations
         users_ref = db.collection("users").stream()
@@ -378,7 +380,7 @@ def trigger_alerts(request: TriggerAlertsRequest):
             logger.error(f"Failed to send hospital SMS: {e}")
         
         # Update accident status
-        db.collection("accidents").document(request.accidentId).update({
+        db.collection("accidents").document(accident_id).update({
             "status": "alerts_triggered",
             "alerts_sent": alert_messages_sent,
             "alerts_triggered_at": firestore.SERVER_TIMESTAMP
@@ -388,7 +390,7 @@ def trigger_alerts(request: TriggerAlertsRequest):
         
         return {
             "status": "success",
-            "accidentId": request.accidentId,
+            "accidentId": accident_id,
             "nearby_users_notified": len(nearby_users),
             "total_alerts_sent": alert_messages_sent,
             "address": address
