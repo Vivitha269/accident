@@ -1,8 +1,22 @@
-import requests
-import json
+"""
+Places Service - Find nearest police stations and hospitals using Overpass API.
+Optimized for faster response times with better timeout handling.
+"""
 
-# Overpass API endpoint for OpenStreetMap data
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+import requests
+from typing import List, Dict, Optional
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Overpass API endpoints (with fallbacks)
+OVERPASS_ENDPOINTS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+]
+
+# Timeout for API requests (in seconds)
+OVERPASS_TIMEOUT = 15  # Reduced from 30 for faster response
 
 # Fallback phone numbers (in case API fails)
 POLICE_MOBILE = "+919342170059"
@@ -11,13 +25,39 @@ HOSPITAL_MOBILE_2 = "+919999999999"
 HOSPITAL_MOBILE_3 = "+918888888888"
 
 
-def find_nearest_police(lat, lon, radius=10000):
+def _make_overpass_request(query: str) -> Optional[dict]:
+    """
+    Make request to Overpass API with fallback endpoints.
+    Returns JSON response or None if all requests fail.
+    """
+    for endpoint in OVERPASS_ENDPOINTS:
+        try:
+            response = requests.get(
+                endpoint,
+                params={"data": query},
+                headers={"User-Agent": "AccidentAlertApp/1.0"},
+                timeout=OVERPASS_TIMEOUT
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+                
+        except requests.exceptions.Timeout:
+            logger.warning(f"Overpass API timeout on endpoint: {endpoint}")
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Overpass API error on {endpoint}: {e}")
+    
+    return None
+
+
+def find_nearest_police(lat: float, lon: float, radius: int = 10000) -> Dict:
     """
     Find the nearest police station using Overpass API.
+    Falls back to default values if API fails.
     """
     # Overpass query to find police stations
     overpass_query = f"""
-    [out:json][timeout:25];
+    [out:json][timeout:{OVERPASS_TIMEOUT}];
     (
       node["amenity"="police"](around:{radius},{lat},{lon});
       way["amenity"="police"](around:{radius},{lat},{lon});
@@ -26,15 +66,9 @@ def find_nearest_police(lat, lon, radius=10000):
     """
     
     try:
-        response = requests.get(
-            OVERPASS_URL,
-            params={"data": overpass_query},
-            headers={"User-Agent": "AccidentAlertApp/1.0"},
-            timeout=30
-        )
+        data = _make_overpass_request(overpass_query)
         
-        if response.status_code == 200:
-            data = response.json()
+        if data:
             elements = data.get("elements", [])
             
             if elements:
@@ -52,7 +86,7 @@ def find_nearest_police(lat, lon, radius=10000):
                 police_name = element.get("tags", {}).get("name", "Police Station")
                 police_phone = element.get("tags", {}).get("phone", POLICE_MOBILE)
                 
-                print(f"Found police station: {police_name} at ({pl_lat}, {pl_lon})")
+                logger.info(f"Found police station: {police_name} at ({pl_lat}, {pl_lon})")
                 
                 return {
                     "name": police_name,
@@ -62,10 +96,10 @@ def find_nearest_police(lat, lon, radius=10000):
                     "address": f"{police_name}, Location: ({pl_lat:.4f}, {pl_lon:.4f})"
                 }
         
-        print("No police station found via Overpass API, using fallback")
+        logger.warning("No police station found via Overpass API, using fallback")
         
     except Exception as e:
-        print(f"Overpass API error for police: {e}")
+        logger.error(f"Overpass API error for police: {e}")
     
     # Fallback to hardcoded values
     return {
@@ -77,12 +111,13 @@ def find_nearest_police(lat, lon, radius=10000):
     }
 
 
-def find_top_3_hospitals(lat, lon, radius=15000):
+def find_top_3_hospitals(lat: float, lon: float, radius: int = 15000) -> List[Dict]:
     """
     Find top 3 nearest hospitals using Overpass API.
+    Returns list of hospital dictionaries with fallback values if API fails.
     """
     overpass_query = f"""
-    [out:json][timeout:25];
+    [out:json][timeout:{OVERPASS_TIMEOUT}];
     (
       node["amenity"="hospital"](around:{radius},{lat},{lon});
       node["healthcare"="hospital"](around:{radius},{lat},{lon});
@@ -95,18 +130,14 @@ def find_top_3_hospitals(lat, lon, radius=15000):
     hospitals = []
     
     try:
-        response = requests.get(
-            OVERPASS_URL,
-            params={"data": overpass_query},
-            headers={"User-Agent": "AccidentAlertApp/1.0"},
-            timeout=30
-        )
+        data = _make_overpass_request(overpass_query)
         
-        if response.status_code == 200:
-            data = response.json()
+        if data:
             elements = data.get("elements", [])
             
             if elements:
+                fallback_phones = [HOSPITAL_MOBILE_1, HOSPITAL_MOBILE_2, HOSPITAL_MOBILE_3]
+                
                 for i, element in enumerate(elements[:3]):
                     if element.get("type") == "node":
                         h_lat = element.get("lat")
@@ -117,10 +148,9 @@ def find_top_3_hospitals(lat, lon, radius=15000):
                         h_lon = center.get("lon")
                     
                     hospital_name = element.get("tags", {}).get("name", f"Hospital {i+1}")
-                    hospital_phone = element.get("tags", {}).get("phone", 
-                                           [HOSPITAL_MOBILE_1, HOSPITAL_MOBILE_2, HOSPITAL_MOBILE_3][i])
+                    hospital_phone = element.get("tags", {}).get("phone", fallback_phones[i])
                     
-                    print(f"Found hospital: {hospital_name} at ({h_lat}, {h_lon})")
+                    logger.info(f"Found hospital: {hospital_name} at ({h_lat}, {h_lon})")
                     
                     hospitals.append({
                         "name": hospital_name,
@@ -131,7 +161,7 @@ def find_top_3_hospitals(lat, lon, radius=15000):
                     })
         
     except Exception as e:
-        print(f"Overpass API error for hospitals: {e}")
+        logger.error(f"Overpass API error for hospitals: {e}")
     
     # If we didn't find enough hospitals, add fallbacks
     if len(hospitals) < 3:
@@ -154,3 +184,4 @@ def find_top_3_hospitals(lat, lon, radius=15000):
                 hospitals.append(fh)
     
     return hospitals[:3]
+

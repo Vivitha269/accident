@@ -57,20 +57,21 @@ class AccidentReport(BaseModel):
     """Pydantic model for accident reporting with validation."""
     userId: str
     name: str = "Accident User"  # Default name if not provided
-    latitude: float
-    longitude: float
+    latitude: Optional[float] = None  # Can be null if unavailable
+    longitude: Optional[float] = None  # Can be null if unavailable
+    timestamp: int  # Unix timestamp in milliseconds
 
     @field_validator('latitude')
     @classmethod
     def validate_latitude(cls, v):
-        if not -90 <= v <= 90:
+        if v is not None and not -90 <= v <= 90:
             raise ValueError('Latitude must be between -90 and 90')
         return v
 
     @field_validator('longitude')
     @classmethod
     def validate_longitude(cls, v):
-        if not -180 <= v <= 180:
+        if v is not None and not -180 <= v <= 180:
             raise ValueError('Longitude must be between -180 and 180')
         return v
 
@@ -150,6 +151,12 @@ def send_sms(to: str, message: str) -> bool:
         return False
 
 
+class DeviceRegistration(BaseModel):
+    """Model for device registration with Firebase UID."""
+    userId: str
+    name: str
+
+
 # ==================== API ENDPOINTS ====================
 @app.get("/")
 def root():
@@ -157,11 +164,63 @@ def root():
     return {"message": "Accident Detection API is running", "status": "active"}
 
 
-@app.post("/accident")
+@app.post("/register_device")
+def register_device(registration: DeviceRegistration):
+    """
+    Register device for push notifications using Firebase Phone Authentication.
+    
+    Input: Firebase UID and user name
+    Action: Create new user or update existing user
+    Response: {"status": "success", "message": "User registered"}
+    """
+    try:
+        user_id = registration.userId
+        user_name = registration.name
+        
+        # Check if user already exists
+        user_doc = db.collection("users").document(user_id).get()
+        
+        if user_doc.exists:
+            # Update existing user - update name and last active status
+            db.collection("users").document(user_id).update({
+                "name": user_name,
+                "lastActive": firestore.SERVER_TIMESTAMP
+            })
+            logger.info(f"Updated existing user: {user_id}")
+        else:
+            # Create new user record
+            db.collection("users").document(user_id).set({
+                "userId": user_id,
+                "name": user_name,
+                "createdAt": firestore.SERVER_TIMESTAMP,
+                "lastActive": firestore.SERVER_TIMESTAMP,
+                "emergencyContacts": []
+            })
+            logger.info(f"Created new user: {user_id}")
+        
+        return {
+            "status": "success",
+            "message": "User registered"
+        }
+    except Exception as e:
+        logger.error(f"Error in register_device: {e}")
+        raise HTTPException(status_code=500, detail="Failed to register device")
+
+
+@app.post("/alert")
 def accident_report(report: AccidentReport):
     """
     Reports an accident, saves it to Firestore, and immediately returns an ID.
     The Android app will then call /trigger_alerts after a delay.
+    
+    Expected JSON:
+    {
+        "userId": "user123",
+        "name": "John Doe",
+        "latitude": 12.9716,
+        "longitude": 77.5946,
+        "timestamp": 1715432100000
+    }
     """
     try:
         acc_ref = db.collection("accidents").add({
@@ -169,14 +228,17 @@ def accident_report(report: AccidentReport):
             "name": report.name,
             "latitude": report.latitude,
             "longitude": report.longitude,
+            "timestamp": report.timestamp,  # Store the Unix timestamp from frontend
             "status": "reported",
-            "timestamp": firestore.SERVER_TIMESTAMP
+            "serverTimestamp": firestore.SERVER_TIMESTAMP
         })
         accident_id = acc_ref[1].id
         logger.info(f"New accident reported. ID: {accident_id}")
+        # Return JSON format expected by Android app
         return {
-            "accidentId": accident_id,
-            "status": "User notified. 30s buffer started."
+            "status": "success",
+            "message": "Alert received",
+            "accidentId": accident_id
         }
     except Exception as e:
         logger.error(f"Could not create accident record: {e}")
@@ -399,6 +461,340 @@ def trigger_alerts(accident_id: str):
     except Exception as e:
         logger.error(f"Error in trigger_alerts: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to trigger alerts: {str(e)}")
+
+
+# ============================================================================
+# Frontend-Matched API Endpoints (for static/map.html)
+# ============================================================================
+
+@app.get("/accident")
+def get_accident_route(lat: float = Query(...), lon: float = Query(...)):
+    """
+    Get accident route information including nearest hospital and route geometry.
+    Frontend endpoint: GET /accident?lat=...&lon=...
+    """
+    try:
+        # Find nearest hospital
+        from services.places import find_top_3_hospitals
+        hospitals = find_top_3_hospitals(lat, lon)
+        
+        if not hospitals:
+            return {
+                "status": "error",
+                "message": "No hospitals found nearby",
+                "nearest_hospital": None,
+                "route": None
+            }
+        
+        hospital = hospitals[0]
+        
+        # Get route to hospital using OSRM
+        from services.routing import get_route
+        route = get_route(lat, lon, hospital["lat"], hospital["lon"])
+        
+        return {
+            "status": "success",
+            "nearest_hospital": hospital,
+            "route": route
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in get_accident_route: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get route: {str(e)}")
+
+
+@app.post("/accept_emergency/{accident_id}")
+def accept_emergency(accident_id: str, hospital_name: str = Query(...)):
+    """
+    Accept and dispatch ambulance for an accident.
+    Frontend endpoint: POST /accept_emergency/{accident_id}?hospital_name=...
+    """
+    try:
+        # Get accident details
+        accident_doc = db.collection("accidents").document(accident_id).get()
+        
+        if not accident_doc.exists:
+            raise HTTPException(status_code=404, detail="Accident not found")
+        
+        accident_data = accident_doc.to_dict()
+        accident_lat = accident_data.get("latitude")
+        accident_lon = accident_data.get("longitude")
+        victim_name = accident_data.get("name", "Accident Victim")
+        
+        # Find nearest hospital
+        from services.places import find_top_3_hospitals
+        hospitals = find_top_3_hospitals(accident_lat, accident_lon)
+        
+        if hospitals:
+            hospital = hospitals[0]
+            
+            # Update accident status to dispatched
+            db.collection("accidents").document(accident_id).update({
+                "status": "dispatched",
+                "dispatched_hospital": hospital_name or hospital["name"],
+                "dispatched_at": firestore.SERVER_TIMESTAMP
+            })
+            
+            # Send SMS to hospital
+            try:
+                from twilio_config import normalize_phone_number
+                hospital_phone = hospital.get("phone")
+                if hospital_phone:
+                    normalized = normalize_phone_number(hospital_phone)
+                    if normalized:
+                        address = get_address_from_coords(accident_lat, accident_lon)
+                        location_url = f"https://www.google.com/maps?q={accident_lat},{accident_lon}"
+                        
+                        sms_text = f"🚑 AMBULANCE DISPATCH REQUIRED!\n\n"
+                        sms_text += f"👤 Patient: {victim_name}\n"
+                        sms_text += f"📍 Location: {address}\n"
+                        sms_text += f"🗺️ Maps: {location_url}\n"
+                        sms_text += f"\n⚠️ PLEASE dispatch ambulance immediately!"
+                        
+                        send_sms(normalized, sms_text)
+                        logger.info(f"Dispatch SMS sent to hospital: {hospital['name']}")
+            except Exception as e:
+                logger.error(f"Failed to send dispatch SMS: {e}")
+        
+        return {
+            "status": "success",
+            "message": "Emergency accepted and ambulance dispatched",
+            "accidentId": accident_id,
+            "hospital": hospital_name
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in accept_emergency: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to accept emergency: {str(e)}")
+
+
+@app.post("/confirm_pickup/{accident_id}")
+def confirm_pickup(accident_id: str, hospital_name: str = Query(...), hospital_phone: str = Query(...)):
+    """
+    Confirm ambulance pickup and notify family.
+    Frontend endpoint: POST /confirm_pickup/{accident_id}?hospital_name=...&hospital_phone=...
+    """
+    try:
+        # Get accident details
+        accident_doc = db.collection("accidents").document(accident_id).get()
+        
+        if not accident_doc.exists:
+            raise HTTPException(status_code=404, detail="Accident not found")
+        
+        accident_data = accident_doc.to_dict()
+        accident_lat = accident_data.get("latitude")
+        accident_lon = accident_data.get("longitude")
+        victim_name = accident_data.get("name", "Accident Victim")
+        victim_userId = accident_data.get("userId")
+        
+        # Update accident status to picked_up
+        db.collection("accidents").document(accident_id).update({
+            "status": "picked_up",
+            "pickup_confirmed_at": firestore.SERVER_TIMESTAMP,
+            "pickup_hospital": hospital_name,
+            "pickup_hospital_phone": hospital_phone
+        })
+        
+        # Send SMS to family members
+        if victim_userId:
+            try:
+                from twilio_config import normalize_phone_number
+                
+                victim_user_doc = db.collection("users").document(victim_userId).get()
+                if victim_user_doc.exists:
+                    victim_user_data = victim_user_doc.to_dict()
+                    contacts_raw = victim_user_data.get("emergencyContacts", [])
+                    
+                    # Parse contacts
+                    contacts = []
+                    if isinstance(contacts_raw, list):
+                        for item in contacts_raw:
+                            if isinstance(item, dict):
+                                contacts.append(item)
+                            elif isinstance(item, str):
+                                if item.startswith('+'):
+                                    contacts.append({"phone": item, "name": "Emergency Contact"})
+                    elif isinstance(contacts_raw, dict):
+                        contacts.append(contacts_raw)
+                    
+                    address = get_address_from_coords(accident_lat, accident_lon)
+                    
+                    # Send notification to each family contact
+                    for contact_map in contacts:
+                        phone_number = (contact_map.get("phone") or 
+                                      contact_map.get("phoneNumber") or 
+                                      contact_map.get("mobile") or
+                                      contact_map.get("telephone"))
+                        
+                        if phone_number:
+                            try:
+                                normalized = normalize_phone_number(phone_number)
+                                if normalized:
+                                    sms_text = f"✅ PICKUP CONFIRMED!\n\n"
+                                    sms_text += f"👤 Patient: {victim_name}\n"
+                                    sms_text += f"🏥 Hospital: {hospital_name}\n"
+                                    sms_text += f"📍 Accident Site: {address}\n"
+                                    sms_text += f"\nAmbulance has picked up the patient. They are being taken to {hospital_name}."
+                                    
+                                    send_sms(normalized, sms_text)
+                                    logger.info(f"Pickup confirmation SMS sent to family: {normalized}")
+                            except Exception as e:
+                                logger.error(f"Failed to send family pickup notification: {e}")
+                                
+            except Exception as e:
+                logger.error(f"Error sending family notifications: {e}")
+        
+        return {
+            "status": "success",
+            "message": "Pickup confirmed and family notified",
+            "accidentId": accident_id,
+            "hospital": hospital_name
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in confirm_pickup: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to confirm pickup: {str(e)}")
+
+
+@app.post("/trigger_alarm/{accident_id}")
+def trigger_alarm(accident_id: str):
+    """
+    Trigger emergency alarm to all responders.
+    Frontend endpoint: POST /trigger_alarm/{accident_id}
+    """
+    try:
+        # Get accident details
+        accident_doc = db.collection("accidents").document(accident_id).get()
+        
+        if not accident_doc.exists:
+            raise HTTPException(status_code=404, detail="Accident not found")
+        
+        accident_data = accident_doc.to_dict()
+        accident_lat = accident_data.get("latitude")
+        accident_lon = accident_data.get("longitude")
+        victim_name = accident_data.get("name", "Accident Victim")
+        victim_userId = accident_data.get("userId")
+        
+        address = get_address_from_coords(accident_lat, accident_lon)
+        location_url = f"https://www.google.com/maps?q={accident_lat},{accident_lon}"
+        
+        alarm_messages_sent = 0
+        
+        # Find and alert police
+        try:
+            from services.places import find_nearest_police
+            from twilio_config import normalize_phone_number
+            
+            police = find_nearest_police(accident_lat, accident_lon)
+            if police:
+                police_phone = police.get('phone')
+                if police_phone:
+                    normalized = normalize_phone_number(police_phone)
+                    if normalized:
+                        sms_text = f"🚨🚔 CRITICAL EMERGENCY ALARM! 🚔🚨\n\n"
+                        sms_text += f"⚠️ IMMEDIATE RESPONSE REQUIRED!\n"
+                        sms_text += f"👤 Victim: {victim_name}\n"
+                        sms_text += f"📍 Location: {address}\n"
+                        sms_text += f"🗺️ Maps: {location_url}\n"
+                        sms_text += f"\n⏰ THIS IS AN URGENT ALARM - RESPOND IMMEDIATELY!"
+                        
+                        send_sms(normalized, sms_text)
+                        alarm_messages_sent += 1
+                        logger.info(f"Alarm SMS sent to police: {police['name']}")
+        except Exception as e:
+            logger.error(f"Failed to send police alarm: {e}")
+        
+        # Find and alert hospitals
+        try:
+            from services.places import find_top_3_hospitals
+            
+            hospitals = find_top_3_hospitals(accident_lat, accident_lon)
+            for hospital in hospitals:
+                hospital_phone = hospital.get('phone')
+                if hospital_phone:
+                    normalized = normalize_phone_number(hospital_phone)
+                    if normalized:
+                        sms_text = f"🚨🏥 CRITICAL EMERGENCY ALARM! 🏥🚨\n\n"
+                        sms_text += f"⚠️ URGENT PATIENT INCOMING!\n"
+                        sms_text += f"👤 Patient: {victim_name}\n"
+                        sms_text += f"📍 Location: {address}\n"
+                        sms_text += f"🗺️ Maps: {location_url}\n"
+                        sms_text += f"\n⏰ PREPARE FOR EMERGENCY ADMISSION NOW!"
+                        
+                        send_sms(normalized, sms_text)
+                        alarm_messages_sent += 1
+                        logger.info(f"Alarm SMS sent to hospital: {hospital['name']}")
+        except Exception as e:
+            logger.error(f"Failed to send hospital alarm: {e}")
+        
+        # Alert family members
+        if victim_userId:
+            try:
+                victim_user_doc = db.collection("users").document(victim_userId).get()
+                if victim_user_doc.exists:
+                    victim_user_data = victim_user_doc.to_dict()
+                    contacts_raw = victim_user_data.get("emergencyContacts", [])
+                    
+                    contacts = []
+                    if isinstance(contacts_raw, list):
+                        for item in contacts_raw:
+                            if isinstance(item, dict):
+                                contacts.append(item)
+                            elif isinstance(item, str):
+                                if item.startswith('+'):
+                                    contacts.append({"phone": item, "name": "Emergency Contact"})
+                    elif isinstance(contacts_raw, dict):
+                        contacts.append(contacts_raw)
+                    
+                    for contact_map in contacts:
+                        phone_number = (contact_map.get("phone") or 
+                                      contact_map.get("phoneNumber") or 
+                                      contact_map.get("mobile") or
+                                      contact_map.get("telephone"))
+                        
+                        if phone_number:
+                            try:
+                                normalized = normalize_phone_number(phone_number)
+                                if normalized:
+                                    sms_text = f"🚨⚠️ EMERGENCY ALERT! ⚠️🚨\n\n"
+                                    sms_text += f"A critical emergency alarm has been triggered for {victim_name}.\n"
+                                    sms_text += f"📍 Location: {address}\n"
+                                    sms_text += f"🗺️ Maps: {location_url}\n"
+                                    sms_text += f"\nAll emergency services have been notified. Please respond immediately!"
+                                    
+                                    send_sms(normalized, sms_text)
+                                    alarm_messages_sent += 1
+                            except Exception as e:
+                                logger.error(f"Failed to send family alarm: {e}")
+                                
+            except Exception as e:
+                logger.error(f"Error sending family alarm: {e}")
+        
+        # Update accident status
+        db.collection("accidents").document(accident_id).update({
+            "status": "alarm_triggered",
+            "alarm_triggered_at": firestore.SERVER_TIMESTAMP,
+            "alarm_messages_sent": alarm_messages_sent
+        })
+        
+        logger.info(f"Emergency alarm triggered. Total alerts sent: {alarm_messages_sent}")
+        
+        return {
+            "status": "success",
+            "message": "Emergency alarm triggered",
+            "accidentId": accident_id,
+            "total_alerts_sent": alarm_messages_sent
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in trigger_alarm: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to trigger alarm: {str(e)}")
 
 
 # ============================================================================
