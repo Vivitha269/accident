@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Accident Alert - {{ name }}</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { 
+            font-family: sans-serif; 
+            padding: 20px; 
+            background: #f0f0f0; 
+            margin: 0;
+        }
+        h1 { 
+            color: #dc3545;
+            margin-bottom: 10px;
+        }
+        #map { 
+            height: 500px; 
+            width: 100%; 
+            border-radius: 10px; 
+            border: 2px solid red;
+            margin-bottom: 20px;
+        }
+        .btn-accept { 
+            width: 100%; 
+            padding: 20px; 
+            background: #28a745; 
+            color: white; 
+            border: none; 
+            font-size: 1.5rem; 
+            cursor: pointer; 
+            margin-top: 10px;
+            border-radius: 5px;
+        }
+        .btn-pickup { 
+            width: 100%; 
+            padding: 20px; 
+            background: #17a2b8; 
+            color: white; 
+            border: none; 
+            font-size: 1.5rem; 
+            cursor: pointer; 
+            margin-top: 10px;
+            border-radius: 5px;
+        }
+        .btn-alarm { 
+            width: 100%; 
+            padding: 15px; 
+            background: #dc3545; 
+            color: white; 
+            border: none; 
+            font-size: 1.2rem; 
+            cursor: pointer; 
+            margin-top: 10px;
+            border-radius: 5px;
+        }
+        .btn-accept:hover { background: #218838; }
+        .btn-pickup:hover { background: #138496; }
+        .btn-alarm:hover { background: #c82333; }
+        
+        .info-panel { 
+            background: white; 
+            padding: 15px; 
+            margin-top: 10px; 
+            border-radius: 10px;
+        }
+        .route-info { 
+            margin: 5px 0; 
+            padding: 10px; 
+            background: #f8f9fa; 
+            border-radius: 5px; 
+        }
+        .police-route { border-left: 4px solid #2196F3; }
+        .hospital-route { border-left: 4px solid #f44336; }
+        
+        .status-badge { 
+            display: inline-block; 
+            padding: 5px 15px; 
+            border-radius: 20px; 
+            font-weight: bold; 
+            margin-bottom: 10px; 
+        }
+        .status-reported { background: #ffc107; color: #000; }
+        .status-active { background: #fd7e14; color: #fff; }
+        .status-dispatched { background: #17a2b8; color: #fff; }
+        .status-picked_up { background: #28a745; color: #fff; }
+        
+        .info-row {
+            margin: 10px 0;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 5px;
+        }
+        .info-label {
+            font-weight: bold;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <h1>🚨 ACCIDENT ALERT: {{ name }}</h1>
+    <div id="status-badge" class="status-badge status-{{ status }}">{{ status|upper }}</div>
+    
+    <div id="map"></div>
+    
+    <div class="info-panel">
+        <h3>📍 Accident Information</h3>
+        <div class="info-row">
+            <span class="info-label">Address:</span> {{ address }}
+        </div>
+        <div class="info-row">
+            <span class="info-label">Coordinates:</span> {{ lat }}, {{ lon }}
+        </div>
+        <div class="info-row">
+            <span class="info-label">Time:</span> {{ timestamp }}
+        </div>
+        
+        <h3>🛣️ Route Information</h3>
+        <div id="route-info">Loading routes...</div>
+    </div>
+    
+    <button class="btn-accept" onclick="acceptEmergency()">✅ ACCEPT & DISPATCH AMBULANCE</button>
+    <button class="btn-pickup" onclick="confirmPickup()">🚑 CONFIRM AMBULANCE PICKUP</button>
+    <button class="btn-alarm" onclick="triggerAlarm()">🚨 TRIGGER EMERGENCY ALARM</button>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // Initialize map
+        var lat = {{ lat }};
+        var lon = {{ lon }};
+        var accidentId = "{{ accident_id }}";
+        var accidentName = "{{ name }}";
+        
+        var map = L.map("map").setView([lat, lon], 15);
+        
+        // Add OpenStreetMap tiles
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+        
+        // Add accident marker
+        var accidentMarker = L.marker([lat, lon]).addTo(map)
+            .bindPopup('<b>🚨 Accident Location</b><br>' + accidentName)
+            .openPopup();
+        
+        // Fetch routes to hospital
+        async function fetchRoutes() {
+            try {
+                // Find nearest hospital
+                var hospitalRes = await fetch('/accident/hospitals?lat=' + lat + '&lon=' + lon);
+                var hospitalData = await hospitalRes.json();
+                
+                if (hospitalData.hospitals && hospitalData.hospitals.length > 0) {
+                    var hospital = hospitalData.hospitals[0];
+                    
+                    // Add hospital marker
+                    var hospitalIcon = L.divIcon({
+                        html: '🏥',
+                        className: 'hospital-marker',
+                        iconSize: [30, 30]
+                    });
+                    
+                    L.marker([hospital.lat, hospital.lon], {icon: hospitalIcon})
+                        .addTo(map)
+                        .bindPopup('<b>🏥 Hospital</b><br>' + hospital.name);
+                    
+                    // Draw route to hospital
+                    var routeUrl = 'https://router.project-osrm.org/route/v1/driving/' + 
+                                   lon + ',' + lat + ';' + hospital.lon + ',' + hospital.lat + 
+                                   '?overview=full&geometries=geojson';
+                    
+                    var routeRes = await fetch(routeUrl);
+                    var routeData = await routeRes.json();
+                    
+                    if (routeData.routes && routeData.routes.length > 0) {
+                        var route = routeData.routes[0];
+                        var coords = route.geometry.coordinates.map(c => [c[1], c[0]]);
+                        
+                        L.polyline(coords, {color: 'red', weight: 5})
+                            .addTo(map)
+                            .bindPopup('<b>Route to Hospital</b><br>' + 
+                                      (route.distance/1000).toFixed(1) + ' km, ' + 
+                                      (route.duration/60).toFixed(0) + ' min');
+                        
+                        // Update route info
+                        document.getElementById('route-info').innerHTML = 
+                            '<div class="route-info hospital-route">' +
+                            '<b>🏥 Hospital Route</b><br>' +
+                            'Distance: ' + (route.distance/1000).toFixed(1) + ' km<br>' +
+                            'Duration: ' + (route.duration/60).toFixed(0) + ' min<br>' +
+                            'Hospital: ' + hospital.name +
+                            '</div>';
+                    }
+                }
+                
+                // Find nearest police
+                var policeRes = await fetch('/accident/police?lat=' + lat + '&lon=' + lon);
+                var policeData = await policeRes.json();
+                
+                if (policeData.police) {
+                    var police = policeData.police;
+                    
+                    var policeIcon = L.divIcon({
+                        html: '👮',
+                        className: 'police-marker',
+                        iconSize: [30, 30]
+                    });
+                    
+                    L.marker([police.lat, police.lon], {icon: policeIcon})
+                        .addTo(map)
+                        .bindPopup('<b>👮 Police Station</b><br>' + police.name);
+                }
+                
+            } catch (error) {
+                console.error('Error fetching routes:', error);
+                document.getElementById('route-info').innerHTML = 'Error loading routes';
+            }
+        }
+        
+        // Accept emergency and dispatch
+        async function acceptEmergency() {
+            var url = '/accept_emergency/' + accidentId;
+            var res = await fetch(url, { method: 'POST' });
+            var data = await res.json();
+            
+            if (data.status === 'success') {
+                alert('✅ Ambulance dispatched successfully!');
+                document.getElementById('status-badge').textContent = 'DISPATCHED';
+                document.getElementById('status-badge').className = 'status-badge status-dispatched';
+            } else {
+                alert('Error: ' + (data.detail || 'Unknown error'));
+            }
+        }
+        
+        // Confirm ambulance pickup
+        async function confirmPickup() {
+            var hName = prompt("Enter Hospital Name (for pickup confirmation):");
+            if (!hName) return;
+            
+            var hPhone = prompt("Enter Hospital Phone Number:");
+            if (!hPhone) return;
+            
+            var url = '/confirm_pickup/' + accidentId + 
+                     '?hospital_name=' + encodeURIComponent(hName) + 
+                     '&hospital_phone=' + encodeURIComponent(hPhone);
+            
+            var res = await fetch(url, { method: 'POST' });
+            var data = await res.json();
+            
+            if (data.status === 'success') {
+                alert('✅ Pickup confirmed! Family has been notified.');
+                document.getElementById('status-badge').textContent = 'PICKED UP';
+                document.getElementById('status-badge').className = 'status-badge status-picked_up';
+            } else {
+                alert('Error: ' + (data.detail || 'Unknown error'));
+            }
+        }
+        
+        // Trigger emergency alarm
+        async function triggerAlarm() {
+            var confirmAlarm = confirm("⚠️ This will trigger an emergency alarm to all responders! Continue?");
+            if (!confirmAlarm) return;
+            
+            var url = '/trigger_alarm/' + accidentId;
+            var res = await fetch(url, { method: 'POST' });
+            var data = await res.json();
+            
+            if (data.status === 'success') {
+                alert('🚨 Emergency alarm triggered! All responders have been alerted.');
+            } else {
+                alert('Error: ' + (data.detail || 'Unknown error'));
+            }
+        }
+        
+        // Initialize
+        fetchRoutes();
+    </script>
+</body>
+</html>
+
