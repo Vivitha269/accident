@@ -93,6 +93,7 @@ def get_default_numbers():
 def send_sms(to_number, body, retry_count=0):
     """
     Send basic SMS message.
+    Trial accounts have 160 character limit - truncate if needed.
     """
     if not client:
         print("⚠️ Twilio client not initialized - SMS not sent")
@@ -107,6 +108,12 @@ def send_sms(to_number, body, retry_count=0):
     if not is_valid_phone_number(to_number):
         print(f"Skipping SMS to invalid number: {to_number}")
         return False
+    
+    # Truncate message for Trial accounts (max 160 characters)
+    max_length = 160
+    if len(body) > max_length:
+        body = body[:max_length-3] + "..."
+        print(f"⚠️ Message truncated for Trial account: {max_length} chars")
     
     try:
         message = client.messages.create(

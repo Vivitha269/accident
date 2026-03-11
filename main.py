@@ -54,6 +54,10 @@ templates = Jinja2Templates(directory="templates")
 # Key: accident_id, Value: {'timeout': thread, 'data': accident_data}
 pending_confirmations = {}
 
+# In-memory user storage (for testing without Firebase)
+# Key: user_id, Value: user_data
+users_db = {}
+
 
 # ============================================================================
 # Data Models
@@ -358,9 +362,6 @@ def register_user(user: UserCreate):
     Register new user with REQUIRED 2 emergency contacts.
     Both emergency contacts are mandatory for safety.
     """
-    if not db:
-        raise HTTPException(status_code=500, detail="Database not connected")
-    
     # Validate both emergency contacts are provided
     if not user.emergency_contact_1 or not user.emergency_contact_1.get('phone'):
         raise HTTPException(
@@ -393,7 +394,19 @@ def register_user(user: UserCreate):
         "created_at": datetime.now()
     }
     
-    db.collection("users").document(user_id).set(user_data)
+    # Try Firebase first, fallback to in-memory
+    if db:
+        try:
+            db.collection("users").document(user_id).set(user_data)
+            print(f"✅ User saved to Firebase: {user_id}")
+        except Exception as e:
+            print(f"Error saving to Firebase: {e}")
+            users_db[user_id] = user_data
+            print(f"✅ User saved to memory: {user_id}")
+    else:
+        # Use in-memory storage
+        users_db[user_id] = user_data
+        print(f"✅ User saved to memory (no Firebase): {user_id}")
     
     return {
         "status": "success",
@@ -469,17 +482,28 @@ def report_accident(accident: AccidentReport):
     emergency_contact_1 = None
     emergency_contact_2 = None
     
-    if accident.user_id and db:
-        try:
-            user_doc = db.collection("users").document(accident.user_id).get()
-            if user_doc.exists:
-                user_data = user_doc.to_dict()
+    if accident.user_id:
+        # Try Firebase first, then fallback to memory
+        if db:
+            try:
+                user_doc = db.collection("users").document(accident.user_id).get()
+                if user_doc.exists:
+                    user_data = user_doc.to_dict()
+                    emergency_contact_1 = user_data.get('emergency_contact_1')
+                    emergency_contact_2 = user_data.get('emergency_contact_2')
+                    print(f"👥 Emergency Contact 1 (Firebase): {emergency_contact_1}")
+                    print(f"👥 Emergency Contact 2 (Firebase): {emergency_contact_2}")
+            except Exception as e:
+                print(f"Error fetching user from Firebase: {e}")
+        
+        # Fallback to memory storage
+        if not emergency_contact_1 and not emergency_contact_2:
+            if accident.user_id in users_db:
+                user_data = users_db[accident.user_id]
                 emergency_contact_1 = user_data.get('emergency_contact_1')
                 emergency_contact_2 = user_data.get('emergency_contact_2')
-                print(f"👥 Emergency Contact 1: {emergency_contact_1}")
-                print(f"👥 Emergency Contact 2: {emergency_contact_2}")
-        except Exception as e:
-            print(f"Error fetching user: {e}")
+                print(f"👥 Emergency Contact 1 (Memory): {emergency_contact_1}")
+                print(f"👥 Emergency Contact 2 (Memory): {emergency_contact_2}")
     
     # Prepare accident data
     accident_data = {

@@ -3,7 +3,7 @@ import json
 from config import OVERPASS_URL
 
 
-def find_nearest_police(lat, lon, radius=5000):
+def find_nearest_police(lat, lon, radius=10000):
     """
     Find nearest police station using Overpass API.
     
@@ -57,9 +57,12 @@ def find_nearest_police(lat, lon, radius=5000):
                 
                 if nearest:
                     tags = nearest.get("tags", {})
+                    phone = tags.get("phone", tags.get("contact:phone", ""))
+                    if not phone:
+                        phone = "+917338903743"  # Default police number
                     return {
                         "name": tags.get("name", tags.get("official_name", "Police Station")),
-                        "phone": tags.get("phone", tags.get("contact:phone", "")),
+                        "phone": phone,
                         "lat": nearest.get("lat", nearest.get("center", {}).get("lat")),
                         "lon": nearest.get("lon", nearest.get("center", {}).get("lon"))
                     }
@@ -132,7 +135,7 @@ def find_top_3_hospitals(lat, lon, radius=10000):
                     
                     hospital_list.append({
                         "name": tags.get("name", tags.get("official_name", "Hospital")),
-                        "phone": tags.get("phone", tags.get("contact:phone", "")),
+                        "phone": tags.get("phone", tags.get("contact:phone", "")) or "+918825597447",
                         "lat": elem_lat,
                         "lon": elem_lon,
                         "distance": dist
@@ -149,7 +152,7 @@ def find_top_3_hospitals(lat, lon, radius=10000):
     if not hospitals:
         return [{
             "name": "City Hospital",
-            "phone": "+1000000002",
+            "phone": "+918825597447",
             "lat": lat,
             "lon": lon
         }]
