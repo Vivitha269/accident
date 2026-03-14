@@ -1,233 +1,98 @@
-import requests
-import json
-from config import OVERPASS_URL
+"""Fast Async Places - Cache + Parallel Overpass"""
 
+import asyncio
+from functools import lru_cache
+from typing import Dict, List, Optional
+import httpx
+from config import OVERPASS_URL, DEFAULT_HOSPITAL_NUMBER, DEFAULT_POLICE_NUMBER
 
-def find_nearest_police(lat, lon, radius=10000):
-    """
-    Find nearest police station using Overpass API.
-    
-    Args:
-        lat: Latitude
-        lon: Longitude
-        radius: Search radius in meters (default 5km)
-    
-    Returns:
-        dict: Police station info with name, phone, lat, lon
-    """
-    # Overpass query for police
+async def overpass_query(query: str) -> Optional[List[Dict]]:
+    """Async Overpass API query."""
+    headers = {"User-Agent": "AI-Accident-Detection/1.0"}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(OVERPASS_URL, data={"data": query}, headers=headers)
+        if resp.status_code == 200:
+            return resp.json().get("elements", [])
+    return None
+
+@lru_cache(maxsize=128)
+def police_query_hash(lat: float, lon: float) -> str:
+    """Cache key for police query."""
+    return hashlib.md5(f"{lat:.6f},{lon:.6f}".encode()).hexdigest()
+
+@lru_cache(maxsize=128)
+def hospital_query_hash(lat: float, lon: float) -> str:
+    """Cache key for hospital query."""
+    return hashlib.md5(f"{lat:.6f},{lon:.6f}".encode()).hexdigest()
+
+async def find_nearest_police(lat: float, lon: float) -> Dict:
+    """Find nearest police station async."""
     query = f"""
-    [out:json][timeout:25];
+    [out:json][timeout:10];
     (
-      node["amenity"="police"](around:{radius},{lat},{lon});
-      way["amenity"="police"](around:{radius},{lat},{lon});
-      relation["amenity"="police"](around:{radius},{lat},{lon});
+      node["amenity"="police"](around:5000,{lat},{lon});
+      way["amenity"="police"](around:5000,{lat},{lon});
+      relation["amenity"="police"](around:5000,{lat},{lon});
     );
     out center;
     """
     
-    try:
-        response = requests.post(OVERPASS_URL, data={"data": query}, timeout=30)
+    elements = await overpass_query(query)
+    if elements:
+        # Find closest (sort by distance)
+        def distance(e):
+            return ((e.get('lat', lat) - lat)**2 + (e.get('lon', lon)**2))**0.5
         
-        if response.status_code == 200:
-            data = response.json()
-            elements = data.get("elements", [])
-            
-            if elements:
-                # Find the closest one
-                nearest = None
-                min_dist = float('inf')
-                
-                for element in elements:
-                    if element.get("type") == "node":
-                        elem_lat = element.get("lat")
-                        elem_lon = element.get("lon")
-                    elif element.get("type") in ["way", "relation"] and "center" in element:
-                        elem_lat = element["center"].get("lat")
-                        elem_lon = element["center"].get("lon")
-                    else:
-                        continue
-                    
-                    if elem_lat and elem_lon:
-                        # Calculate distance (simple approximation)
-                        dist = ((elem_lat - lat)**2 + (elem_lon - lon)**2)**0.5
-                        if dist < min_dist:
-                            min_dist = dist
-                            nearest = element
-                
-                if nearest:
-                    tags = nearest.get("tags", {})
-                    phone = tags.get("phone", tags.get("contact:phone", ""))
-                    if not phone:
-                        phone = "+917338903743"  # Default police number
-                    return {
-                        "name": tags.get("name", tags.get("official_name", "Police Station")),
-                        "phone": phone,
-                        "lat": nearest.get("lat", nearest.get("center", {}).get("lat")),
-                        "lon": nearest.get("lon", nearest.get("center", {}).get("lon"))
-                    }
-        
-        print(f"No police stations found via Overpass API")
-        
-    except Exception as e:
-        print(f"Overpass API error (police): {e}")
-    
-    # Return default police info if API fails
+        closest = min(elements, key=distance)
+        return {
+            "name": closest.get('tags', {}).get('name', 'Police Station'),
+            "phone": closest.get('tags', {}).get('phone', DEFAULT_POLICE_NUMBER),
+            "lat": closest.get('lat', lat),
+            "lon": closest.get('lon', lon)
+        }
     return {
         "name": "Local Police",
-        "phone": "+1000000000",
+        "phone": DEFAULT_POLICE_NUMBER,
         "lat": lat,
         "lon": lon
     }
 
-
-def find_top_3_hospitals(lat, lon, radius=10000):
-    """
-    Find top 3 nearest hospitals using Overpass API.
-    
-    Args:
-        lat: Latitude
-        lon: Longitude
-        radius: Search radius in meters (default 10km)
-    
-    Returns:
-        list: List of hospital info dictionaries (max 3)
-    """
-    # Overpass query for hospitals
+async def find_top_3_hospitals(lat: float, lon: float) -> List[Dict]:
+    """Find top 3 nearest hospitals async."""
     query = f"""
-    [out:json][timeout:25];
+    [out:json][timeout:10];
     (
-      node["amenity"="hospital"](around:{radius},{lat},{lon});
-      way["amenity"="hospital"](around:{radius},{lat},{lon});
-      relation["amenity"="hospital"](around:{radius},{lat},{lon});
-      node["healthcare"="hospital"](around:{radius},{lat},{lon});
-      way["healthcare"="hospital"](around:{radius},{lat},{lon});
+      node["amenity"~"hospital|clinic"](around:10000,{lat},{lon});
+      way["amenity"~"hospital|clinic"](around:10000,{lat},{lon});
+      relation["amenity"~"hospital|clinic"](around:10000,{lat},{lon});
     );
     out center;
     """
     
-    hospitals = []
-    
-    try:
-        response = requests.post(OVERPASS_URL, data={"data": query}, timeout=30)
+    elements = await overpass_query(query)
+    if elements:
+        def distance(e):
+            return ((e.get('lat', lat) - lat)**2 + (e.get('lon', lon)**2))**0.5
         
-        if response.status_code == 200:
-            data = response.json()
-            elements = data.get("elements", [])
-            
-            # Calculate distance for each hospital
-            hospital_list = []
-            
-            for element in elements:
-                if element.get("type") == "node":
-                    elem_lat = element.get("lat")
-                    elem_lon = element.get("lon")
-                elif element.get("type") in ["way", "relation"] and "center" in element:
-                    elem_lat = element["center"].get("lat")
-                    elem_lon = element["center"].get("lon")
-                else:
-                    continue
-                
-                if elem_lat and elem_lon:
-                    # Calculate distance (simple approximation in degrees)
-                    dist = ((elem_lat - lat)**2 + (elem_lon - lon)**2)**0.5
-                    tags = element.get("tags", {})
-                    
-                    hospital_list.append({
-                        "name": tags.get("name", tags.get("official_name", "Hospital")),
-                        "phone": tags.get("phone", tags.get("contact:phone", "")) or "+918825597447",
-                        "lat": elem_lat,
-                        "lon": elem_lon,
-                        "distance": dist
-                    })
-            
-            # Sort by distance and take top 3
-            hospital_list.sort(key=lambda x: x["distance"])
-            hospitals = hospital_list[:3]
-            
-    except Exception as e:
-        print(f"Overpass API error (hospitals): {e}")
-    
-    # Return default hospital if API fails
-    if not hospitals:
-        return [{
-            "name": "City Hospital",
-            "phone": "+918825597447",
-            "lat": lat,
-            "lon": lon
-        }]
-    
-    return hospitals
-
-
-def find_nearest_ambulance(lat, lon, radius=10000):
-    """
-    Find nearest ambulance service using Overpass API.
-    
-    Args:
-        lat: Latitude
-        lon: Longitude
-        radius: Search radius in meters
-    
-    Returns:
-        dict: Ambulance service info
-    """
-    # Overpass query for ambulance
-    query = f"""
-    [out:json][timeout:25];
-    (
-      node["amenity"="ambulance_station"](around:{radius},{lat},{lon});
-      way["amenity"="ambulance_station"](around:{radius},{lat},{lon});
-      node["emergency"="ambulance"](around:{radius},{lat},{lon});
-      way["emergency"="ambulance"](around:{radius},{lat},{lon});
-    );
-    out center;
-    """
-    
-    try:
-        response = requests.post(OVERPASS_URL, data={"data": query}, timeout=30)
-        
-        if response.status_code == 200:
-            data = response.json()
-            elements = data.get("elements", [])
-            
-            if elements:
-                nearest = None
-                min_dist = float('inf')
-                
-                for element in elements:
-                    if element.get("type") == "node":
-                        elem_lat = element.get("lat")
-                        elem_lon = element.get("lon")
-                    elif element.get("type") in ["way", "relation"] and "center" in element:
-                        elem_lat = element["center"].get("lat")
-                        elem_lon = element["center"].get("lon")
-                    else:
-                        continue
-                    
-                    if elem_lat and elem_lon:
-                        dist = ((elem_lat - lat)**2 + (elem_lon - lon)**2)**0.5
-                        if dist < min_dist:
-                            min_dist = dist
-                            nearest = element
-                
-                if nearest:
-                    tags = nearest.get("tags", {})
-                    return {
-                        "name": tags.get("name", "Ambulance Service"),
-                        "phone": tags.get("phone", tags.get("contact:phone", "")),
-                        "lat": nearest.get("lat", nearest.get("center", {}).get("lat")),
-                        "lon": nearest.get("lon", nearest.get("center", {}).get("lon"))
-                    }
-    
-    except Exception as e:
-        print(f"Overpass API error (ambulance): {e}")
-    
-    # Return default ambulance
-    return {
-        "name": "Ambulance Service",
-        "phone": "+1000000001",
+        sorted_elements = sorted(elements, key=distance)[:3]
+        hospitals = []
+        for e in sorted_elements:
+            hospitals.append({
+                "name": e.get('tags', {}).get('name', 'Hospital'),
+                "phone": e.get('tags', {}).get('phone', DEFAULT_HOSPITAL_NUMBER),
+                "lat": e.get('lat', lat),
+                "lon": e.get('lon', lon)
+            })
+        return hospitals
+    return [{
+        "name": "Emergency Hospital",
+        "phone": DEFAULT_HOSPITAL_NUMBER,
         "lat": lat,
         "lon": lon
-    }
+    }] * 3
 
+async def find_police_and_hospitals(lat: float, lon: float):
+    """Parallel query."""
+    police_task = find_nearest_police(lat, lon)
+    hospitals_task = find_top_3_hospitals(lat, lon)
+    return await asyncio.gather(police_task, hospitals_task)
