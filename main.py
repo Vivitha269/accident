@@ -127,7 +127,7 @@ async def sms_webhook(request: Request):
     return PlainTextResponse("OK")
 
 @app.post("/accident")
-def report_accident(accident: AccidentReport):
+async def report_accident(accident: AccidentReport):
     print(f"🚨 Accident: {accident.device_id} at {accident.latitude},{accident.longitude}")
     
     if accident.latitude == 0 or accident.longitude == 0:
@@ -137,8 +137,8 @@ def report_accident(accident: AccidentReport):
     address = reverse_geocode(accident.latitude, accident.longitude)
     maps_url = f"https://maps.google.com/maps?q={accident.latitude},{accident.longitude}"
     
-    police_info = find_nearest_police(accident.latitude, accident.longitude)
-    hospitals = find_top_3_hospitals(accident.latitude, accident.longitude)
+    police_info = await find_nearest_police(accident.latitude, accident.longitude)
+    hospitals = await find_top_3_hospitals(accident.latitude, accident.longitude)
     
     hospital_info = hospitals[0] if hospitals and hospitals[0].get('phone') else {"name": "Emergency Hospital", "phone": DEFAULT_HOSPITAL_NUMBER}
     

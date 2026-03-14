@@ -1,10 +1,12 @@
 """Fast Async Places - Cache + Parallel Overpass"""
 
 import asyncio
+import hashlib
 from functools import lru_cache
 from typing import Dict, List, Optional
 import httpx
 from config import OVERPASS_URL, DEFAULT_HOSPITAL_NUMBER, DEFAULT_POLICE_NUMBER
+
 
 async def overpass_query(query: str) -> Optional[List[Dict]]:
     """Async Overpass API query."""
