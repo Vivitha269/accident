@@ -32,6 +32,12 @@ users_db = {}
 # Store recent accidents for hospital SMS replies (key: hospital_phone -> accident_data)
 recent_accidents = {}
 
+def format_phone_number(phone: str) -> str:
+    """Normalize phone for dict key."""
+    if not phone:
+        return ""
+    return phone.replace('+', '').replace('-', '').replace(' ', '').replace('(', '').replace(')', '')
+
 class AccidentReport(BaseModel):
     device_id: str
     latitude: float
@@ -146,11 +152,21 @@ async def report_accident(accident: AccidentReport):
     
     emergency_contact_1 = None
     emergency_contact_2 = None
-    if accident.user_id:
-        if accident.user_id in users_db:
-            user_data = users_db[accident.user_id]
-            emergency_contact_1 = user_data.get('emergency_contact_1')
-            emergency_contact_2 = user_data.get('emergency_contact_2')
+    if accident.user_id and db:
+        try:
+            user_ref = db.collection('users').document(accident.user_id)
+            user_doc = user_ref.get()
+            if user_doc.exists:
+                user_data = user_doc.to_dict()
+                emergency_contact_1 = user_data.get('emergency_contact_1')
+                emergency_contact_2 = user_data.get('emergency_contact_2')
+                print(f"✅ Loaded emergency contacts for user {accident.user_id}")
+            else:
+                print(f"⚠️ No user data found for {accident.user_id}")
+        except Exception as e:
+            print(f"⚠️ Firebase user lookup error: {e}")
+    elif accident.user_id:
+        print(f"⚠️ Firebase not available for user {accident.user_id}")
     
     accident_data = {
         "id": accident_id,
@@ -166,12 +182,20 @@ async def report_accident(accident: AccidentReport):
         "police_info": police_info
     }
     
+    # Store in Firebase accidents collection
+    if db:
+        try:
+            db.collection('accidents').document(accident_id).set(accident_data)
+            print(f"✅ Accident {accident_id} stored in Firebase")
+        except Exception as e:
+            print(f"⚠️ Firebase store error: {e}")
+    
+    pending_confirmations[accident_id] = accident_data
+    
     # Start 30s timer
     timer = threading.Timer(30.0, trigger_emergency_response, args=[accident_id, accident_data])
     timer.daemon = True
     timer.start()
-    
-    pending_confirmations[accident_id] = accident_data
     
     print(f"⏰ 30s timer started for {accident_id}. Hospital: {hospital_info['phone']}")
     
@@ -180,6 +204,13 @@ async def report_accident(accident: AccidentReport):
         "accident_id": accident_id,
         "message": "30s to confirm OK or auto SMS to hospital/police"
     }
+
+@app.post("/cancel/{accident_id}")
+async def cancel_accident(accident_id: str):
+    if accident_id in pending_confirmations:
+        del pending_confirmations[accident_id]
+        return {"status": "cancelled", "message": "Emergency alert cancelled"}
+    return {"status": "not_found", "message": "No pending accident found"}
 
 @app.post("/test_sms")
 def test_sms(to_number: str = Query(...), message: str = Query("Test")):

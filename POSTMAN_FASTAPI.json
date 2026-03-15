@@ -1,0 +1,136 @@
+{
+  "info": {
+    "name": "AI Accident FastAPI Endpoints Test (port 8000)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["health"]
+        }
+      }
+    },
+    {
+      "name": "Register Device",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Success\", () => {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "pm.collectionVariables.set(\"userId\", pm.response.json().userId);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"userId\": \"test-{{ $randomUUID }}\",\n  \"name\": \"Test Driver\",\n  \"fcmToken\": \"fcm-test-token\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/users/register_device",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "users", "register_device"]
+        }
+      }
+    },
+    {
+      "name": "Accident V1",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Success\", () => {",
+              "  pm.response.to.have.status(201);",
+              "});",
+              "const json = pm.response.json();",
+              "pm.collectionVariables.set(\"accidentId\", json.accidentId);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"name\": \"Test Driver\",\n  \"latitude\": 12.9716,\n  \"longitude\": 77.5946,\n  \"deviceId\": \"device-{{ $randomUUID }}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/accidents/accident",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "accidents", "accident"]
+        }
+      }
+    },
+    {
+      "name": "Accident V2",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"reportId\": \"report-{{ $randomUUID }}\",\n  \"userId\": \"{{userId}}\",\n  \"latitude\": 28.6139,\n  \"longitude\": 77.2090,\n  \"timestamp\": \"2024-01-01T12:00:00Z\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/accidents/report_accident",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "accidents", "report_accident"]
+        }
+      }
+    },
+    {
+      "name": "Trigger Alerts",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/accidents/trigger_alerts/{{accidentId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "accidents", "trigger_alerts", "{{accidentId}}"]
+        }
+      }
+    },
+    {
+      "name": "Docs",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/docs",
+          "host": ["{{baseUrl}}"],
+          "path": ["docs"]
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "userId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "accidentId",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}
