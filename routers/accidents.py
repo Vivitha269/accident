@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from models import AccidentAlert, AccidentResponse
+from models import AccidentAlert, AccidentResponse, AccidentV1Payload, AccidentV2Payload
 from firebase_service import firebase_service
 from dependencies import get_current_user
 from twilio_config import send_sms
@@ -25,17 +25,31 @@ async def accident_alert(alert: AccidentAlert, current_user_id: str = Depends(ge
         
         await firebase_service.db.collection('accidents').document(accident_id).set(alert_dict)
         
-        # Get user emergency contacts
+        # Get user data for FCM/contacts
         user_doc = firebase_service.db.collection('users').document(current_user_id).get()
         if user_doc.exists:
             user_data = user_doc.to_dict()
             contacts = user_data.get('emergencyContacts', [])
+            fcm_token = user_data.get('fcmToken', '')
+            
+            alert_msg = f"🚨 Accident alert for {user_data.get('name', 'User')}! Lat: {alert.latitude}, Lng: {alert.longitude}. Reply 1=ambulance, 2=no"
+            
+            # FCM first (silent push)
+            if fcm_token:
+                firebase_service.send_fcm(fcm_token, "🚨 Accident Detected", alert_msg, {
+                    'type': 'accident_alert',
+                    'accidentId': accident_id,
+                    'lat': str(alert.latitude),
+                    'lng': str(alert.longitude)
+                })
+            
+            # SMS to contacts
             if contacts:
                 for contact in contacts:
-                    await send_sms(contact['phone'], f"🚨 Accident alert for {user_data['name']}! Lat: {alert.latitude}, Lng: {alert.longitude}. Reply 1=ambulance, 2=no")
+                    await send_sms(contact['phone'], alert_msg)
                 await firebase_service.db.collection('accidents').document(accident_id).update({'emergencyNotified': True})
         
-        return {"message": "Accident alert created and notifications sent", "accidentId": accident_id}
+        return {"message": "Accident alert created, FCM+SMS sent", "accidentId": accident_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -126,19 +140,34 @@ async def trigger_alerts(accident_id: str):
         
         user_data = user_doc.to_dict()
         contacts = user_data.get('emergencyContacts', [])
-        if not contacts:
-            raise HTTPException(status_code=400, detail="No emergency contacts")
+        fcm_token = user_data.get('fcmToken', '')
         
-        message = f"🚨 EMERGENCY ALERT! Accident ID: {accident_id} Lat: {accident_data['latitude']}, Lng: {accident_data['longitude']}"
+        if not contacts and not fcm_token:
+            raise HTTPException(status_code=400, detail="No emergency contacts or FCM token")
+        
+        message_title = "🚨 EMERGENCY ALERT!"
+        message_body = f"Accident ID: {accident_id} | Lat: {accident_data['latitude']}, Lng: {accident_data['longitude']}"
+        
+        # Send FCM push notifications
+        if fcm_token:
+            firebase_service.send_fcm(fcm_token, message_title, message_body, {
+                'type': 'emergency',
+                'accidentId': accident_id,
+                'lat': str(accident_data['latitude']),
+                'lng': str(accident_data['longitude'])
+            })
+        
+        # SMS fallback
         for contact in contacts:
-            await send_sms(contact['phone'], message)
+            await send_sms(contact['phone'], f"{message_title} {message_body}")
         
         await firebase_service.db.collection('accidents').document(accident_id).update({
             'emergencyNotified': True,
-            'status': 'alerts_triggered'
+            'status': 'alerts_triggered',
+            'fcmSent': True
         })
         
-        return {"message": "Alerts triggered"}
+        return {"message": "SMS + FCM alerts triggered", "fcm_token_used": bool(fcm_token), "contacts_notified": len(contacts)}
     except HTTPException:
         raise
     except Exception as e:

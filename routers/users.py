@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPBearer
-from models import UserCreate, UserLogin, UserOut, Token, EmergencyContact
+from models import UserCreate, UserLogin, UserOut, Token, EmergencyContact, RegisterDevicePayload
 from firebase_service import firebase_service
 from passlib.context import CryptContext
 from jose import JWTError, jwt

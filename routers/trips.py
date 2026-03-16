@@ -4,14 +4,18 @@ from firebase_service import firebase_service
 from typing import List
 from datetime import datetime, timedelta
 from slowapi import Limiter
+from fastapi import Request
 from slowapi.util import get_remote_address
+from dependencies import get_current_user
+from google.cloud import firestore
 
 router = APIRouter(prefix="/trips", tags=["trips"])
+from fastapi import Request
 limiter = Limiter(key_func=get_remote_address)
 
 @router.post("/data")
 @limiter.limit("100/minute")
-async def log_trip_data(trip: TripData, current_user_id: str = Depends(get_current_user)):
+async def log_trip_data(request: Request, trip: TripData, current_user_id = Depends(get_current_user)):
     try:
         trip_dict = trip.dict()
         trip_dict['userId'] = current_user_id
@@ -26,7 +30,7 @@ async def log_trip_data(trip: TripData, current_user_id: str = Depends(get_curre
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/history")
-async def get_trip_history(limit: int = 100, current_user_id: str = Depends(get_current_user)):
+async def get_trip_history(limit: int = 100, current_user_id = Depends(get_current_user)):
     try:
         trips_ref = firebase_service.db.collection(f"trips/{current_user_id}").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(limit)
         trips = []
@@ -39,7 +43,7 @@ async def get_trip_history(limit: int = 100, current_user_id: str = Depends(get_
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/analytics")
-async def get_analytics(days: int = 7, current_user_id: str = Depends(get_current_user)):
+async def get_analytics(days: int = 7, current_user_id = Depends(get_current_user)):
     try:
         cutoff = datetime.utcnow() - timedelta(days=days)
         trips_ref = firebase_service.db.collection(f"trips/{current_user_id}").where("timestamp", ">=", cutoff)

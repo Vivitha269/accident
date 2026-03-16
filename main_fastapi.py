@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+import firebase_admin.firestore as firestore
+
 
 from models import *
 from firebase_service import firebase_service
@@ -59,8 +61,8 @@ async def health():
 
 # Existing accident endpoint (enhanced)
 @app.post("/accident")
-@limiter.limit("10/minute")
-async def report_accident(accident: AccidentReport):
+@app.state.limiter.limit("10/minute")
+async def report_accident(request: Request, accident: AccidentReport):
     accident_id = str(uuid.uuid4())
     address = reverse_geocode(accident.latitude, accident.longitude)
     maps_url = f"https://maps.google.com/maps?q={accident.latitude},{accident.longitude}"
@@ -77,7 +79,7 @@ async def report_accident(accident: AccidentReport):
         "maps_url": maps_url,
         "hospital_info": hospital_info,
         "police_info": police_info,
-        "timestamp": firestore.SERVER_TIMESTAMP
+"timestamp": firebase_admin.firestore.SERVER_TIMESTAMP
     })
     
     if firestore_db:
