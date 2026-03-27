@@ -108,3 +108,18 @@ def get_directions_text(start_lat, start_lon, end_lat, end_lon):
         print(f"Error getting directions: {e}")
         return None
 
+
+def get_osrm_route_url(start_lat: float, start_lon: float, end_lat: float, end_lon: float) -> str:
+    """
+    Generate shareable OSRM route URL.
+    
+    Args:
+        start_lat, start_lon: Responder/current location
+        end_lat, end_lon: Accident location
+    
+    Returns:
+        str: Direct OSRM route link
+    """
+    return f"{OSRM_URL}/{start_lon},{start_lat};{end_lon},{end_lat}?overview=full&geometries=geojson"
+
+

@@ -1,131 +1,58 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import HTTPBearer
-from models import UserCreate, UserLogin, UserOut, Token, EmergencyContact, RegisterDevicePayload
+from fastapi import APIRouter, HTTPException
+from pydantic import EmailStr
+from models import UserCreate, EmergencyContactCreate, EmergencyContactsCreate # 
 from firebase_service import firebase_service
-from passlib.context import CryptContext
-from jose import JWTError, jwt
-from typing import List
-import os
-from datetime import datetime, timedelta
+from twilio_config import format_phone_number
+from datetime import datetime
+from google.cloud import firestore
+import logging
 
-router = APIRouter(prefix="/users", tags=["users"])
-security = HTTPBearer()
+logger = logging.getLogger(__name__)
+router = APIRouter(tags=["users"])
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-ALGORITHM = "HS256"
-SECRET_KEY = os.getenv("JWT_SECRET", "your-secret-key-change-me")
-
-async def get_current_user(token: str = Depends(security)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid authentication credentials"
-    )
-    try:
-        uid = firebase_service.verify_id_token(token)
-        if uid is None:
-            raise credentials_exception
-        user_doc = firebase_service.db.collection('users').document(uid).get()
-        if not user_doc.exists:
-            raise credentials_exception
-        user_data = user_doc.to_dict()
-        user_data['userId'] = uid
-        return user_data
-    except JWTError:
-        raise credentials_exception
-
-@router.post("/register", response_model=Token)
+@router.post("/register")
 async def register(user: UserCreate):
-    # Check if user exists
-    user_doc = firebase_service.db.collection('users').document(user.phoneNumber).get()
-    if user_doc.exists:
-        raise HTTPException(status_code=400, detail="User already exists")
+    phone = format_phone_number(user.phone)
+    if not phone:
+        raise HTTPException(400, "Invalid phone number format. Use E.164 (e.g. +91...)")
     
-    # Hash password
-    hashed_password = pwd_context.hash(user.password)
+    doc_ref = firebase_service.db.collection('users').document(phone)
+    if doc_ref.get().exists:
+        raise HTTPException(400, "User already exists with this phone number")
     
-    # Create Firebase auth user
-    if not firebase_service.create_user(user.phoneNumber, user.email, user.phoneNumber):
-        raise HTTPException(status_code=500, detail="Auth creation failed")
+    data = user.dict()
+    data['phone'] = phone
+    data['id'] = doc_ref.id
+    data['created_at'] = firestore.SERVER_TIMESTAMP
     
-    # Store user data
-    user_dict = user.dict()
-    user_dict['password'] = hashed_password
-    user_dict['createdAt'] = firestore.SERVER_TIMESTAMP
-    user_dict['updatedAt'] = firestore.SERVER_TIMESTAMP
-    await firebase_service.db.collection('users').document(user.phoneNumber).set(user_dict)
-    
-    # Generate JWT
-    payload = {"userId": user.phoneNumber, "exp": datetime.utcnow() + timedelta(days=7)}
-    token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-    
-    return {"access_token": token, "token_type": "bearer"}
+    doc_ref.set(data)
+    logger.info(f"User registered: id={doc_ref.id}, phone={phone}, name={user.name}")
+    return {"status": "user created", "id": doc_ref.id}
 
-@router.post("/login", response_model=Token)
-async def login(credentials: UserLogin):
-    # Find user
-    user_snapshot = firebase_service.db.collection('users').where('email', '==', credentials.email).limit(1).stream()
-    user = None
-    for doc in user_snapshot:
-        user = doc.to_dict()
-        user['userId'] = doc.id
-        break
+@router.post("/emergency-contact")
+async def add_emergency_contacts(contacts: EmergencyContactsCreate):
+    # Search for user by ID (which is the formatted phone number) 
+    user_ref = firebase_service.db.collection('users').document(contacts.user_id)
+    if not user_ref.get().exists:
+        raise HTTPException(404, "User not found")
     
-    if not user or not pwd_context.verify(credentials.password, user['password']):
-        raise HTTPException(status_code=400, detail="Invalid credentials")
+    formatted_contacts = []
+    # Logic for dual contacts (max 2) 
+    for c in contacts.contacts[:2]:  
+        phone = format_phone_number(c.contact_phone)
+        if not phone:
+            raise HTTPException(400, f"Invalid contact phone: {c.contact_phone}")
+        
+        formatted_contacts.append({
+            'contact_name': c.contact_name,
+            'contact_phone': phone
+        })
     
-    payload = {"userId": user['userId'], "exp": datetime.utcnow() + timedelta(days=7)}
-    token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-    
-    return {"access_token": token, "token_type": "bearer"}
-
-@router.get("/profile", response_model=UserOut)
-async def get_profile(current_user = Depends(get_current_user)):
-    return UserOut(**current_user)
-
-@router.put("/profile")
-async def update_profile(update_data: dict, current_user = Depends(get_current_user)):
-    update_data['updatedAt'] = firestore.SERVER_TIMESTAMP
-    await firebase_service.db.collection('users').document(current_user['userId']).update(update_data)
-    return {"message": "Profile updated"}
-
-@router.post("/contacts")
-async def add_contact(contact: EmergencyContact, current_user = Depends(get_current_user)):
-    user_doc = firebase_service.db.collection('users').document(current_user['userId']).get()
-    contacts = user_doc.to_dict().get('emergencyContacts', [])
-    contacts.append(contact.dict())
-    await firebase_service.db.collection('users').document(current_user['userId']).update({
-        'emergencyContacts': contacts,
-        'updatedAt': firestore.SERVER_TIMESTAMP
+    # Update the user document in Firestore 
+    user_ref.update({
+        'emergency_contacts': formatted_contacts, # Use consistent naming
+        'updated_at': firestore.SERVER_TIMESTAMP
     })
-    return {"message": "Contact added", "contacts": contacts}
-
-@router.get("/contacts")
-async def get_contacts(current_user = Depends(get_current_user)):
-    return {"emergencyContacts": current_user.get('emergencyContacts', [])}
-
-@router.post("/register_device")
-async def register_device(payload: RegisterDevicePayload):
-    try:
-        user_ref = firebase_service.db.collection('users').document(payload.userId)
-        user_doc = user_ref.get()
-        
-        update_data = {
-            "name": payload.name,
-            "fcmToken": payload.fcmToken,
-            "updatedAt": firestore.SERVER_TIMESTAMP
-        }
-        
-        if user_doc.exists:
-            await user_ref.update(update_data)
-            message = "Device registered/updated"
-        else:
-            update_data["emergencyContacts"] = []
-            update_data["createdAt"] = firestore.SERVER_TIMESTAMP
-            await user_ref.set(update_data)
-            message = "New device user created"
-            
-        return {"message": message, "userId": payload.userId}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-from google.cloud import firestore  # Add import for SERVER_TIMESTAMP
+    
+    logger.info(f"Added {len(formatted_contacts)} emergency contacts for user_id={contacts.user_id}")
+    return {"status": "contacts added", "count": len(formatted_contacts)}

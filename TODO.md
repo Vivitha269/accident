@@ -1,54 +1,31 @@
-# AI Accident Detection - FastAPI REST API Only (Port 8000)
+# Dual Emergency Contacts + User Cancel Timer Implementation
 
-Status: Migration in progress [1/6]
+## 1. PLAN CONFIRMATION ✅ (User approved via feedback)
+- Dual contacts (2 members)
+- Accident detection → 30s countdown
+- User cancel within time
+- Timeout → auto SMS/call to 2 contacts + hospital + police
 
-## Completed Analysis
-- FastAPI fully implements all REST endpoints matching Node.js backend
-- Twilio SMS/calls, Firebase auth/DB, services (places, geocoding, routing/OSRM)
-- Rate limiting, CORS, docs at /docs
+## 2. CODE UPDATES (Next)
+### 2.1 models.py ✅
+- [x] Add `EmergencyContactsCreate` (list[EmergencyContactCreate], max 2)
 
-## Migration Steps (FastAPI Only)
+### 2.2 routers/users.py ✅
+- [x] `/emergency-contact` → accept/store list of 2 in Firestore user doc
 
-1. **[COMPLETE ✅] Update run_test.bat**
-   - Now runs pip install && uvicorn main_fastapi:app port 8000
-   
-2. **[COMPLETE ✅] Verify Services**
-   - services/places.py: Full async Overpass police/hospitals with cache
-   - firebase_service.py: FCM send_fcm/send_multicast ready
-   - config.py: Firebase/Twilio/OSRM ready
-   
-3. **[COMPLETE ✅] Integrate FCM**
-   - Added FCM + SMS in /api/accidents/alert and /trigger_alerts/{id}
-   
-4. **[COMPLETE ✅] Documentation**
-   - Created README_FASTAPI.md (FastAPI-only guide, port 8000)
-   
-5. **[COMPLETE ✅] Testing Setup**
-   - run_test.bat ready, POSTMAN_FASTAPI.json complete
-   - All endpoints FCM/SMS integrated
-   
-6. **PROJECT COMPLETE** ✅
-   - FastAPI-only REST API functional
-   - Port 8000 exclusive
-   - Ready to run/test/deploy
-   
-2. **Update Documentation**
-   - Rewrite README.md for FastAPI setup/run on port 8000
-   - Update POSTMAN_FASTAPI.json
-   
-3. **Update Run Scripts**
-   - run_test.bat: pip install -r requirements.txt && uvicorn main_fastapi:app --host 0.0.0.0 --port 8000 --reload
-   
-4. **Deprecate Node.js Backend**
-   - Comment server.js, update backend/README.md
-   - Optional: rm -rf backend/node_modules
-   
-5. **Testing**
-   - Verify all endpoints /health, /api/accidents/alert etc.
-   - Test SMS/FCM flows
-   
-6. **Complete**
-   - Mark all ✅, git commit
+### 2.3 routers/accidents.py ✅
+- [x] `POST /cancel-accident` {accident_id}
 
-**Run FastAPI:** uvicorn main_fastapi:app --reload --port 8000
-**Docs:** http://localhost:8000/docs
+### 2.4 emergency_service.py ✅
+- [x] `start_accident_timer`: asyncio 30s, check cancel flag in Firestore
+- [x] Timeout → `trigger_emergency_alerts` (2 contacts + police/hospital, parallel SMS/call)
+
+### 2.5 POSTMAN_TESTS.md + demo script ✅
+- [x] Update tests/demo + created demo_full_flow.py
+
+## 3. TESTING
+- [ ] Demo: register → 2 contacts → accident → cancel (no alert) vs timeout (alerts)
+
+## 4. DEPLOY
+- [ ] Restart uvicorn
+

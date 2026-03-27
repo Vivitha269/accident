@@ -1,6 +1,64 @@
-# AI Accident Detection Backend
+# Complete FastAPI Backend for Android Accident Detection App
 
-FastAPI-based backend for accident detection and emergency response with Twilio integration.
+✅ **All requirements fulfilled** - FastAPI + Firebase + Twilio SMS/Calls
+
+## Quick Start
+
+```bash
+pip install -r requirements.txt
+uvicorn main_fastapi:app --reload
+```
+
+**Swagger Docs**: http://localhost:8000/docs  
+**Health**: http://localhost:8000/health
+
+## Required REST APIs (All Implemented)
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/register` | POST | Register user |
+| `/api/emergency-contact` | POST | Add emergency contact |
+| `/api/trip-data` | POST | Log continuous GPS/speed |
+| `/api/accident-alert` | POST | **🚨 Accident detected** - Triggers SMS/calls |
+| `/api/response` | POST | User SMS reply (1=Ambulance, 2=Safe) |
+| `/api/trips/{user_id}` | GET | Trip history |
+| `/api/analytics/{user_id}` | GET | Speed analytics + safety score |
+
+## Database Tables (Firebase Collections)
+- `users`
+- `emergency_contacts`
+- `trips`
+- `accident_events`
+- `emergency_responses`
+
+## Postman Tests
+See `POSTMAN_TESTS.md`
+
+## Example Responses
+
+**Trip Data**:
+```json
+{"status": "trip logged", "id": "doc123"}
+```
+
+**Accident Alert**:
+```json
+{"status": "alert received", "accident_id": "evt456"}
+```
+
+**Analytics**:
+```json
+{"average_speed": 45.2, "max_speed": 78.4, "trip_count": 32, "safety_score": 92}
+```
+
+**Features**:
+- 📍 Exact Android field names (speed, latitude, longitude, timestamp, user_id)
+- 🚨 Twilio SMS/Calls to police/hospital/contacts with location
+- 🪵 Full logging
+- 🔒 Input validation & error handling
+- 📊 7-day driving analytics
+
+Backend ready for Android integration!
 
 ## Features
 

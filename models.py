@@ -1,92 +1,57 @@
+from datetime import datetime
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional
-from datetime import datetime
 from enum import Enum
 
-class UserRole(str, Enum):
-    DRIVER = "driver"
-
-class EmergencyContact(BaseModel):
-    name: str
-    phone: str
-    relation: Optional[str] = None
-
+# --- User Models ---
 class UserCreate(BaseModel):
     name: str
-    phoneNumber: str
+    phone: str
     email: EmailStr
-    vehicleType: str
-    password: str
-    emergencyContacts: Optional[List[EmergencyContact]] = []
 
-class UserLogin(BaseModel):
-    email: EmailStr
-    password: str
+class EmergencyContactCreate(BaseModel):
+    contact_name: str
+    contact_phone: str
 
-class UserOut(BaseModel):
-    userId: str
-    name: str
-    phoneNumber: str
-    email: str
-    vehicleType: str
-    emergencyContacts: Optional[List[EmergencyContact]] = []
+class EmergencyContactsCreate(BaseModel):
+    user_id: str
+    contacts: List[EmergencyContactCreate]
 
-class Token(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-
-class AccidentAlert(BaseModel):
-    userId: str
-    latitude: float
-    longitude: float
-    speed: float
-    timestamp: Optional[datetime] = None
-
-class AccidentResponse(BaseModel):
-    accidentId: str
-    response: str  # '1' or '2'
-
-class RegisterDevicePayload(BaseModel):
-    userId: str
-    name: str
-    fcmToken: Optional[str] = ""
-
-class AccidentV1Payload(BaseModel):
-    userId: str
-    name: str
-    latitude: float
-    longitude: float
-    deviceId: str
-
-class AccidentV2Payload(BaseModel):
-    reportId: str
-    userId: str
-    latitude: float
-    longitude: float
-    timestamp: Optional[datetime] = None
-
+# --- Trip Models ---
 class TripData(BaseModel):
-    userId: str
+    user_id: str
     speed: float
     latitude: float
     longitude: float
-    accidentDetected: bool = False
-
-class AnalyticsQuery(BaseModel):
-    days: int = 7
+    timestamp: Optional[float] = None # Support numeric Unix timestamps
 
 class TripOut(BaseModel):
-    tripId: str
+    id: str
+    user_id: str
     speed: float
-    latitude: float
-    longitude: float
     timestamp: datetime
-    accidentDetected: bool
 
-class AccidentReport(BaseModel):
-    device_id: str
+class AnalyticsOut(BaseModel):
+    average_speed: float
+    max_speed: float
+    trip_count: int
+    safety_score: int
+
+# --- Accident Models ---
+class AccidentAlert(BaseModel):
+    user_id: str
     latitude: float
     longitude: float
-    name: Optional[str] = "User"
-    user_id: Optional[str] = None
+    speed: float
+    timestamp: Optional[int] = None
 
+class AccidentResponse(BaseModel):
+    accident_id: str
+    response: str
+
+class HospitalResponse(BaseModel):
+    accident_id: str
+    response: str
+
+class CancelAccident(BaseModel):
+    accident_id: str
