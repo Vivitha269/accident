@@ -104,9 +104,13 @@ async def handle_hospital_confirmation(accident_id: str):
     })
 
     # 2. Get the Victim's info and their Emergency Contacts
-    user_id = accident['user_id']
+    user_id = accident.get('user_id')
+    print(f"DEBUG: Searching for User ID: '{user_id}'") # ADD THIS
     user_doc = db.collection("users").document(user_id).get().to_dict()
     
+    if not user_doc:
+        print(f"DEBUG: No user found in Firebase with ID: '{user_id}'") # ADD THIS
+        return {"status": "error", "message": "User profile not found"}
     if user_doc:
         victim_name = user_doc.get('name', 'The victim')
         contacts = user_doc.get('emergency_contacts', [])
@@ -129,7 +133,7 @@ async def handle_hospital_confirmation(accident_id: str):
                 await send_sms(phone, f"UPDATE: The hospital has confirmed pickup for {victim_name}. They are in safe hands.")
 
     logger.info(f"🏥 Hospital confirmed pickup. Family details sent to Hospital phone.")
-    return {"status": "success", "message": "Pickup confirmed. Family contact details sent via SMS."}
+    return {"status": "success", "message": "✅Pickup confirmed. Family contact details sent via SMS."}
 # --- 5. MANUAL USER RESPONSE (OPTIONAL) ---
 # --- 5. MANUAL USER RESPONSE (CORRECTED) ---
 @router.post("/response")
