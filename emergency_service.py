@@ -18,6 +18,7 @@ async def start_accident_timer(accident_id: str):
     if doc.exists:
         data = doc.to_dict()
         if data.get('status') == 'detected':
+            # Proceed to trigger alerts if user hasn't cancelled
             await trigger_emergency_alerts(accident_id, data)
         else:
             logger.info(f"🚫 Timer ended for {accident_id}. No alerts sent (Status: {data.get('status')})")
@@ -28,39 +29,70 @@ async def trigger_emergency_alerts(accident_id: str, data: dict):
     lat = data.get('location', {}).get('lat') or data.get('latitude')
     lon = data.get('location', {}).get('lon') or data.get('longitude')
     
+    # 1. Reverse Geocode the location
     address = reverse_geocode(lat, lon)
-    # The Most Accurate Map Link
+    # The Most Accurate Map Link (Drops a Red Pin)
     maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
     
-    # 1. Prepare Alert List
+    # 2. Prepare the notification list
     user_doc = db.collection('users').document(user_id).get().to_dict()
-    contacts = user_doc.get('emergency_contacts', []) if user_doc else []
+    
+    # ✅ FIX: Check for both naming conventions in Firebase
+    contacts = []
+    if user_doc:
+        contacts = user_doc.get('emergency_contacts') or user_doc.get('emergencyContacts') or []
 
+    # Start the list with Police and Hospital
     alert_list = [
         {"name": "Police", "phone": DEFAULT_POLICE_NUMBER},
         {"name": "Hospital", "phone": DEFAULT_HOSPITAL_NUMBER}
     ]
-    for c in contacts:
-        alert_list.append({"name": c.get('contact_name'), "phone": c.get('contact_phone')})
 
-    # 2. Loop through and send the CORRECT message
+    # Add user-defined contacts to the list
+    for c in contacts:
+        # ✅ FIX: This ensures the phone number is found even if the field name varies
+        phone = c.get('contact_phone') or c.get('phone') or c.get('contactPhone')
+        name = c.get('contact_name') or c.get('name') or "Emergency Contact"
+        
+        if phone:
+            alert_list.append({"name": name, "phone": phone})
+        else:
+            logger.warning(f"⚠️ Skipping contact {name} because no phone number was found.")
+
+    # 3. Dispatch SMS and Calls to every person in the list
+    logger.info(f"🚨 Dispatching alerts to {len(alert_list)} parties...")
+
     for person in alert_list:
         target_phone = person['phone']
         
+   # --- LOGIC INSIDE THE LOOP ---
         if person['name'] == "Hospital":
-            # --- THE HOSPITAL 'QUESTION' MESSAGE ---
+            # 🏥 PROFESSIONAL HOSPITAL MESSAGE
             hospital_sms = (
-                f"🚨 ACCIDENT PICKUP REQUEST!\n"
-                f"Location: {address}\n"
+                f"🚨 AMBULANCE DISPATCH REQUEST!\n"
+                f"Accident detected at: {address}\n"
                 f"Map: {maps_url}\n\n"
-                f"Are you picking up this victim? Click below to confirm and GET FAMILY CONTACTS:\n"
-                f"http://YOUR_SERVER_IP:8000/api/hospital-confirm/{accident_id}"
+                f"Are you responding? Click to CONFIRM & view family contacts:\n"
+                f"https://accident-api-r53d.onrender.com/api/hospital-confirm/{accident_id}"
             )
             await send_sms(target_phone, hospital_sms)
         else:
-            # --- STANDARD MESSAGE FOR POLICE/FAMILY ---
-            standard_sms = f"EMERGENCY: Accident at {address}. View Map: {maps_url}"
+            # 🚨 PROFESSIONAL FAMILY/POLICE MESSAGE
+            standard_sms = (
+                f"🚩 EMERGENCY: AI Accident Detection identified a crash at {address}.\n"
+                f"View Map: {maps_url}\n\n"
+                f"Emergency services are being notified. Please check on them immediately."
+            )
             await send_sms(target_phone, standard_sms)
 
-        # Voice call for everyone
-        await make_call(target_phone, f"Emergency alert. Accident detected at {address}.")
+        # ✅ Voice call for everyone
+        voice_msg = f"Emergency alert. An accident has been detected at {address}. Please check your text messages."
+        await make_call(target_phone, voice_msg)
+
+    # 4. Update the event status in Firestore
+    db.collection('accident_events').document(accident_id).update({
+        'status': 'alerts_triggered',
+        'alerts_sent_at': datetime.utcnow()
+    })
+    
+    logger.info(f"✅ SUCCESSFULLY alerted all parties for {accident_id}")

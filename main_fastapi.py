@@ -106,8 +106,10 @@ async def hospital_pickup_confirmation(accident_id: str):
         contact_list_str = "\n".join([f"- {c.get('contact_name')}: {c.get('contact_phone')}" for c in contacts])
         
         hospital_msg = (
-            f"✅ Pickup Confirmed for {victim_name}.\n"
-            f"Please contact the family immediately:\n{contact_list_str}"
+          f"✅ PICKUP CONFIRMED for {victim_name}.\n\n"
+            f"Please coordinate with the family immediately:\n"
+            f"{contact_list_str}\n\n"
+            f"The family has been notified that help is on the way."
         )
         
         # SEND SMS TO HOSPITAL (With await!)
