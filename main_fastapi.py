@@ -132,9 +132,10 @@ async def cancel_accident(accident_id: str):
     db.collection("accident_events").document(accident_id).update({"status": "cancelled"})
     return {"status": "success", "message": "Emergency alerts cancelled."}
 
-@app.get("/")
+# Change this line in main_fastapi.py:
+@app.api_route("/", methods=["GET", "HEAD"])
 async def root():
-    return {"message": "AI Accident Backend Active", "docs": "/docs"}
+    return {"status": "online", "message": "AI Accident Backend Active", "docs": "/docs"}
 
 # Router Registration
 app.include_router(users_router, prefix="/api")
